@@ -21,6 +21,10 @@ type ScoredPod struct {
 	Score     float64 `json:"score"`
 }
 
+// Global buffer pool to prevent garbage collection
+var buffers = make(map[uint32][]byte)
+var nextID uint32 = 1
+
 //export score
 func score(ptr, size uint32) uint64 {
 	// Read input JSON from memory
@@ -59,7 +63,9 @@ func score(ptr, size uint32) uint64 {
 //export allocate
 func allocate(size uint32) uint32 {
 	buf := make([]byte, size)
-	return uint32(uintptr(unsafe.Pointer(&buf[0])))
+	ptr := uint32(uintptr(unsafe.Pointer(&buf[0])))
+	buffers[ptr] = buf
+	return ptr
 }
 
 // Helper to read string from memory

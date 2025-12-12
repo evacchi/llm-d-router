@@ -22,8 +22,7 @@ type ScoredPod struct {
 }
 
 // Global buffer pool to prevent garbage collection
-var buffers = make(map[uint32][]byte)
-var nextID uint32 = 1
+var buffers [][]byte
 
 //export score
 func score(ptr, size uint32) uint64 {
@@ -52,25 +51,27 @@ func score(ptr, size uint32) uint64 {
 		return 0
 	}
 
-	// Allocate memory for result and copy
-	resultPtr := allocate(uint32(len(resultJSON)))
-	copyToMemory(resultPtr, resultJSON)
+	// Allocate memory for result - keep reference to prevent GC
+	resultBuf := make([]byte, len(resultJSON))
+	copy(resultBuf, resultJSON)
+	buffers = append(buffers, resultBuf)
+	resultPtr := uint32(uintptr(unsafe.Pointer(&resultBuf[0])))
 
 	// Return pointer and size as packed uint64
-	return (uint64(resultPtr) << 32) | uint64(len(resultJSON))
+	return (uint64(resultPtr) << 32) | uint64(len(resultBuf))
 }
 
 //export allocate
 func allocate(size uint32) uint32 {
 	buf := make([]byte, size)
-	ptr := uint32(uintptr(unsafe.Pointer(&buf[0])))
-	buffers[ptr] = buf
-	return ptr
+	buffers = append(buffers, buf)
+	return uint32(uintptr(unsafe.Pointer(&buf[0])))
 }
 
 // Helper to read string from memory
 func readString(ptr, size uint32) string {
-	return unsafe.String((*byte)(unsafe.Pointer(uintptr(ptr))), size)
+	data := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), size)
+	return string(data)
 }
 
 // Helper to copy data to allocated memory

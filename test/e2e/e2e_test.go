@@ -285,6 +285,48 @@ var _ = ginkgo.Describe("Run end to end tests", ginkgo.Ordered, func() {
 			testutils.DeleteObjects(testConfig, modelServers)
 		})
 	})
+
+	ginkgo.When("Running WASM scorer configuration", func() {
+		ginkgo.It("should route requests with WASM scoring", func() {
+			infPoolObjects = createInferencePool(1, true)
+
+			modelServers := createModelServers(false, false, false, 2, 0, 0)
+
+			epp := createEndPointPicker(wasmScorerConfig)
+
+			prefillPods, decodePods := getModelServerPods(podSelector, prefillSelector, decodeSelector)
+			gomega.Expect(prefillPods).Should(gomega.BeEmpty())
+			gomega.Expect(decodePods).Should(gomega.HaveLen(2))
+
+			// Send multiple completion requests
+			// With WASM scorer returning fixed score, all pods should be scored equally and requests should be distributed
+			podsSeen := make(map[string]bool)
+			for range 10 {
+				nsHdr, podHdr, _ := runCompletion(simplePrompt, modelName)
+				gomega.Expect(nsHdr).Should(gomega.Equal(nsName))
+				gomega.Expect(podHdr).Should(gomega.BeElementOf(decodePods))
+				podsSeen[podHdr] = true
+			}
+
+			// Verify both pods received at least one request
+			gomega.Expect(podsSeen).Should(gomega.HaveLen(2))
+
+			// Send multiple chat completion requests
+			podsSeen = make(map[string]bool)
+			for range 10 {
+				nsHdr, podHdr, _ := runChatCompletion(simplePrompt)
+				gomega.Expect(nsHdr).Should(gomega.Equal(nsName))
+				gomega.Expect(podHdr).Should(gomega.BeElementOf(decodePods))
+				podsSeen[podHdr] = true
+			}
+
+			// Verify both pods received at least one request
+			gomega.Expect(podsSeen).Should(gomega.HaveLen(2))
+
+			testutils.DeleteObjects(testConfig, epp)
+			testutils.DeleteObjects(testConfig, modelServers)
+		})
+	})
 })
 
 // createModelServers creates the model server resources used for testing from the given filePaths.
@@ -552,5 +594,22 @@ schedulingProfiles:
   - pluginRef: decode-filter
   - pluginRef: max-score-picker
   - pluginRef: helloWorld
+    weight: 1
+`
+
+const wasmScorerConfig = `apiVersion: inference.networking.x-k8s.io/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+- name: wasmScorer
+  type: wasm-scorer
+- type: decode-filter
+- type: max-score-picker
+- type: single-profile-handler
+schedulingProfiles:
+- name: default
+  plugins:
+  - pluginRef: decode-filter
+  - pluginRef: max-score-picker
+  - pluginRef: wasmScorer
     weight: 1
 `

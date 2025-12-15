@@ -5,6 +5,47 @@ import (
 	"unsafe"
 )
 
+// ScoringInput represents the complete input data for the WASM scorer
+type ScoringInput struct {
+	Request *RequestData      `json:"request,omitempty"`
+	Pods    []PodData         `json:"pods"`
+}
+
+// RequestData represents LLM request information
+type RequestData struct {
+	RequestID   string            `json:"request_id"`
+	TargetModel string            `json:"target_model"`
+	Body        *LLMRequestBody   `json:"body,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+}
+
+// LLMRequestBody contains the request-body fields
+type LLMRequestBody struct {
+	Completions     *CompletionsRequest     `json:"completions,omitempty"`
+	ChatCompletions *ChatCompletionsRequest `json:"chat_completions,omitempty"`
+}
+
+// CompletionsRequest represents a completions request
+type CompletionsRequest struct {
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// ChatCompletionsRequest represents a chat completions request
+type ChatCompletionsRequest struct {
+	Messages []Message `json:"messages,omitempty"`
+}
+
+// Message represents a chat message
+type Message struct {
+	Role    string  `json:"role,omitempty"`
+	Content Content `json:"content,omitempty"`
+}
+
+// Content can be either a string or structured content
+type Content struct {
+	Raw string `json:"-"`
+}
+
 // PodData represents the input pod information
 type PodData struct {
 	Name      string            `json:"name"`
@@ -29,15 +70,23 @@ func score(ptr, size uint32) uint64 {
 	// Read input JSON from memory
 	inputData := readString(ptr, size)
 
-	// Parse input pods
-	var pods []PodData
-	if err := json.Unmarshal([]byte(inputData), &pods); err != nil {
+	// Parse scoring input
+	var input ScoringInput
+	if err := json.Unmarshal([]byte(inputData), &input); err != nil {
 		return 0
 	}
 
-	// Score each pod (simple: all pods get score 1.0)
-	results := make([]ScoredPod, len(pods))
-	for i, pod := range pods {
+	// Score each pod
+	// In this simple example, all pods get score 1.0
+	// You can access input data for request-aware scoring:
+	// - input.Request.RequestID
+	// - input.Request.TargetModel
+	// - input.Request.Headers
+	// - input.Request.Body.Completions.Prompt
+	// - input.Request.Body.ChatCompletions.Messages
+	// - input.State (map of cycle state data)
+	results := make([]ScoredPod, len(input.Pods))
+	for i, pod := range input.Pods {
 		results[i] = ScoredPod{
 			Name:      pod.Name,
 			Namespace: pod.Namespace,

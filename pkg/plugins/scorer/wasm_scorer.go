@@ -28,6 +28,22 @@ type WasmScorerParameters struct {
 	// Future: allow custom WASM module paths
 }
 
+// ScoringInput represents the complete input data for the WASM scorer
+type ScoringInput struct {
+	Request *RequestData      `json:"request,omitempty"`
+	Pods    []PodData         `json:"pods"`
+}
+
+// RequestData represents LLM request information for WASM
+type RequestData struct {
+	RequestID   string `json:"request_id"`
+	TargetModel string `json:"target_model"`
+	// Data contains the request-body fields that we parse out as user input.
+	Body *types.LLMRequestBody `json:"body,omitempty"`
+	// Headers is a map of the request headers.
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
 // PodData represents the input pod information for WASM
 type PodData struct {
 	Name      string            `json:"name"`
@@ -85,7 +101,7 @@ func (s *WasmScorer) WithName(name string) *WasmScorer {
 }
 
 // Score calls the WASM module to score pods.
-func (s *WasmScorer) Score(ctx context.Context, _ *types.CycleState, _ *types.LLMRequest,
+func (s *WasmScorer) Score(ctx context.Context, cycleState *types.CycleState, request *types.LLMRequest,
 	pods []types.Pod) map[types.Pod]float64 {
 
 	logger := log.FromContext(ctx).V(logutil.DEBUG)
@@ -102,10 +118,27 @@ func (s *WasmScorer) Score(ctx context.Context, _ *types.CycleState, _ *types.LL
 		}
 	}
 
+	// Build request data
+	var requestData *RequestData
+	if request != nil {
+		requestData = &RequestData{
+			RequestID:   request.RequestId,
+			TargetModel: request.TargetModel,
+			Body:        request.Body,
+			Headers:     request.Headers,
+		}
+	}
+
+	// Build scoring input
+	scoringInput := ScoringInput{
+		Request: requestData,
+		Pods:    podDataList,
+	}
+
 	// Marshal input
-	inputJSON, err := json.Marshal(podDataList)
+	inputJSON, err := json.Marshal(scoringInput)
 	if err != nil {
-		logger.Error(err, "Failed to marshal pod data for WASM")
+		logger.Error(err, "Failed to marshal scoring input for WASM")
 		return make(map[types.Pod]float64)
 	}
 

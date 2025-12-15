@@ -52,20 +52,32 @@ func TestWasmModule(t *testing.T) {
 	}
 
 	// Create test input
-	testInput := []PodData{
-		{
-			Name:      "pod-a",
-			Namespace: "default",
-			Address:   "10.0.0.1",
-			Port:      "8080",
-			Labels:    map[string]string{"app": "test"},
+	testInput := ScoringInput{
+		Request: &RequestData{
+			RequestID:   "test-request-1",
+			TargetModel: "test-model",
+			Headers:     map[string]string{"x-test": "value"},
+			Body: &LLMRequestBody{
+				Completions: &CompletionsRequest{
+					Prompt: "test prompt",
+				},
+			},
 		},
-		{
-			Name:      "pod-b",
-			Namespace: "default",
-			Address:   "10.0.0.2",
-			Port:      "8080",
-			Labels:    map[string]string{"app": "test"},
+		Pods: []PodData{
+			{
+				Name:      "pod-a",
+				Namespace: "default",
+				Address:   "10.0.0.1",
+				Port:      "8080",
+				Labels:    map[string]string{"app": "test"},
+			},
+			{
+				Name:      "pod-b",
+				Namespace: "default",
+				Address:   "10.0.0.2",
+				Port:      "8080",
+				Labels:    map[string]string{"app": "test"},
+			},
 		},
 	}
 
@@ -129,16 +141,16 @@ func TestWasmModule(t *testing.T) {
 	}
 
 	// Verify results
-	if len(scoredPods) != len(testInput) {
-		t.Errorf("Expected %d scored pods, got %d", len(testInput), len(scoredPods))
+	if len(scoredPods) != len(testInput.Pods) {
+		t.Errorf("Expected %d scored pods, got %d", len(testInput.Pods), len(scoredPods))
 	}
 
 	for i, scored := range scoredPods {
-		if scored.Name != testInput[i].Name {
-			t.Errorf("Pod %d: expected name %s, got %s", i, testInput[i].Name, scored.Name)
+		if scored.Name != testInput.Pods[i].Name {
+			t.Errorf("Pod %d: expected name %s, got %s", i, testInput.Pods[i].Name, scored.Name)
 		}
-		if scored.Namespace != testInput[i].Namespace {
-			t.Errorf("Pod %d: expected namespace %s, got %s", i, testInput[i].Namespace, scored.Namespace)
+		if scored.Namespace != testInput.Pods[i].Namespace {
+			t.Errorf("Pod %d: expected namespace %s, got %s", i, testInput.Pods[i].Namespace, scored.Namespace)
 		}
 		if scored.Score != 1.0 {
 			t.Errorf("Pod %d: expected score 1.0, got %f", i, scored.Score)

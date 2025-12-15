@@ -170,6 +170,7 @@ func (s *WasmScorer) Score(ctx context.Context, cycleState *types.CycleState, re
 }
 
 // callWasm executes the embedded WASM scorer
+// note: the following initializes the runtime+module each time
 func (s *WasmScorer) callWasm(inputJSON []byte) ([]ScoredPod, error) {
 	// Create a new runtime
 	runtime := wazero.NewRuntime(s.ctx)

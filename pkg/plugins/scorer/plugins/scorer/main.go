@@ -5,63 +5,6 @@ import (
 	"unsafe"
 )
 
-// ScoringInput represents the complete input data for the WASM scorer
-type ScoringInput struct {
-	Request *RequestData      `json:"request,omitempty"`
-	Pods    []PodData         `json:"pods"`
-}
-
-// RequestData represents LLM request information
-type RequestData struct {
-	RequestID   string            `json:"request_id"`
-	TargetModel string            `json:"target_model"`
-	Body        *LLMRequestBody   `json:"body,omitempty"`
-	Headers     map[string]string `json:"headers,omitempty"`
-}
-
-// LLMRequestBody contains the request-body fields
-type LLMRequestBody struct {
-	Completions     *CompletionsRequest     `json:"completions,omitempty"`
-	ChatCompletions *ChatCompletionsRequest `json:"chat_completions,omitempty"`
-}
-
-// CompletionsRequest represents a completions request
-type CompletionsRequest struct {
-	Prompt string `json:"prompt,omitempty"`
-}
-
-// ChatCompletionsRequest represents a chat completions request
-type ChatCompletionsRequest struct {
-	Messages []Message `json:"messages,omitempty"`
-}
-
-// Message represents a chat message
-type Message struct {
-	Role    string  `json:"role,omitempty"`
-	Content Content `json:"content,omitempty"`
-}
-
-// Content can be either a string or structured content
-type Content struct {
-	Raw string `json:"-"`
-}
-
-// PodData represents the input pod information
-type PodData struct {
-	Name      string            `json:"name"`
-	Namespace string            `json:"namespace"`
-	Address   string            `json:"address"`
-	Port      string            `json:"port"`
-	Labels    map[string]string `json:"labels"`
-}
-
-// ScoredPod represents a pod with its score
-type ScoredPod struct {
-	Name      string  `json:"name"`
-	Namespace string  `json:"namespace"`
-	Score     float64 `json:"score"`
-}
-
 // Global buffer pool to prevent garbage collection
 var buffers [][]byte
 
@@ -78,13 +21,12 @@ func score(ptr, size uint32) uint64 {
 
 	// Score each pod
 	// In this simple example, all pods get score 1.0
-	// You can access input data for request-aware scoring:
-	// - input.Request.RequestID
+	// You can access input.Request (types.LLMRequest) for request-aware scoring:
+	// - input.Request.RequestId
 	// - input.Request.TargetModel
 	// - input.Request.Headers
 	// - input.Request.Body.Completions.Prompt
 	// - input.Request.Body.ChatCompletions.Messages
-	// - input.State (map of cycle state data)
 	results := make([]ScoredPod, len(input.Pods))
 	for i, pod := range input.Pods {
 		results[i] = ScoredPod{
@@ -101,13 +43,12 @@ func score(ptr, size uint32) uint64 {
 	}
 
 	// Allocate memory for result - keep reference to prevent GC
-	resultBuf := make([]byte, len(resultJSON))
-	copy(resultBuf, resultJSON)
-	buffers = append(buffers, resultBuf)
-	resultPtr := uint32(uintptr(unsafe.Pointer(&resultBuf[0])))
+	resultLen := len(resultJSON)
+	resultPtr := allocate(uint32(resultLen))
+	copyToMemory(resultPtr, resultJSON)
 
 	// Return pointer and size as packed uint64
-	return (uint64(resultPtr) << 32) | uint64(len(resultBuf))
+	return (uint64(resultPtr) << 32) | uint64(resultLen)
 }
 
 //export allocate
@@ -119,8 +60,7 @@ func allocate(size uint32) uint32 {
 
 // Helper to read string from memory
 func readString(ptr, size uint32) string {
-	data := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), size)
-	return string(data)
+	return unsafe.String((*byte)(unsafe.Pointer(uintptr(ptr))), size)
 }
 
 // Helper to copy data to allocated memory

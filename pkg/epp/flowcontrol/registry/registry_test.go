@@ -71,7 +71,7 @@ func newRegistryTestHarness(t *testing.T, opts harnessOptions) *registryTestHarn
 		}
 
 		cfg, err = NewConfig(
-			newTestPluginsHandle(t),
+			newTestPolicyDefaults(),
 			WithInitialShardCount(shardCount),
 			WithFlowGCTimeout(5*time.Minute),
 			WithPriorityBand(&PriorityBandConfig{Priority: highPriority}),
@@ -173,16 +173,16 @@ func TestFlowRegistry_WithConnection_AndHandle(t *testing.T) {
 	t.Run("ShouldFail_WhenJITFails", func(t *testing.T) {
 		t.Parallel()
 
-		handle := newTestPluginsHandle(t)
+		defaults := newTestPolicyDefaults()
 		badQueueName := queue.RegisteredQueueName("non-existent-queue")
-		badBand, err := NewPriorityBandConfig(handle, highPriority, WithQueue(badQueueName))
+		badBand, err := NewPriorityBandConfig(defaults, highPriority, WithQueue(badQueueName))
 		require.NoError(t, err)
 
 		// Create a Config that uses a mock checker to bypass the strict validation.
 		// The default checker would reject "non-existent-policy", but our mock says it's fine.
 		// This allows us to instantiate the Registry with a latent configuration bomb.
 		cfg, err := NewConfig(
-			handle,
+			defaults,
 			WithPriorityBand(badBand),
 			withCapabilityChecker(&mockCapabilityChecker{
 				checkCompatibilityFunc: func(flowcontrol.OrderingPolicy, queue.RegisteredQueueName) error {
@@ -1153,7 +1153,7 @@ func TestFlowRegistry_PriorityBandGarbageCollection(t *testing.T) {
 // requests waiting on the same flow initialization.
 func TestFlowRegistry_JITErrorScoping(t *testing.T) {
 	t.Parallel()
-	handle := newTestPluginsHandle(t)
+	defaults := newTestPolicyDefaults()
 
 	// Create a registry with a capability checker that passes validation but using a queue name that doesn't exist.
 	// This ensures NewConfig succeeds, but JIT (ensureFlowInfrastructure) fails when trying to instantiate the queue.
@@ -1166,10 +1166,10 @@ func TestFlowRegistry_JITErrorScoping(t *testing.T) {
 
 	// We create a custom band config that uses this failing queue.
 	// We set it as the default band so that dynamic provisioning is used.
-	failingBand, err := NewPriorityBandConfig(handle, 0, WithQueue(failQueueName))
+	failingBand, err := NewPriorityBandConfig(defaults, 0, WithQueue(failQueueName))
 	require.NoError(t, err)
 
-	cfg, err := NewConfig(handle, withCapabilityChecker(mockChecker), WithDefaultPriorityBand(failingBand))
+	cfg, err := NewConfig(defaults, withCapabilityChecker(mockChecker), WithDefaultPriorityBand(failingBand))
 	require.NoError(t, err)
 
 	registry, err := NewFlowRegistry(cfg, logr.Discard())

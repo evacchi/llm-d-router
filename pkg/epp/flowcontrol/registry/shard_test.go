@@ -57,7 +57,7 @@ func newShardTestHarness(t *testing.T) *shardTestHarness {
 	t.Helper()
 
 	globalConfig, err := NewConfig(
-		newTestPluginsHandle(t),
+		newTestPolicyDefaults(),
 		WithPriorityBand(&PriorityBandConfig{Priority: highPriority}),
 		WithPriorityBand(&PriorityBandConfig{Priority: lowPriority}),
 	)
@@ -399,7 +399,7 @@ func TestShard_DynamicProvisioning(t *testing.T) {
 
 		// Update the config definition first (simulating the Registry's job).
 		dynamicPrio := 15
-		newBandCfg, err := NewPriorityBandConfig(newTestPluginsHandle(t), dynamicPrio)
+		newBandCfg, err := NewPriorityBandConfig(newTestPolicyDefaults(), dynamicPrio)
 		require.NoError(t, err)
 		h.shard.config.PriorityBands[dynamicPrio] = newBandCfg
 
@@ -419,7 +419,7 @@ func TestShard_DynamicProvisioning(t *testing.T) {
 
 		// Prepare config.
 		dynamicPrio := 15
-		newBandCfg, err := NewPriorityBandConfig(newTestPluginsHandle(t), dynamicPrio)
+		newBandCfg, err := NewPriorityBandConfig(newTestPolicyDefaults(), dynamicPrio)
 		require.NoError(t, err)
 		h.shard.config.PriorityBands[dynamicPrio] = newBandCfg
 
@@ -528,7 +528,7 @@ func TestShard_Concurrency_AllOrderedPriorityLevels_RaceSafety(t *testing.T) {
 	h := newShardTestHarness(t)
 
 	dynamicPrio := 15
-	newBandCfg, err := NewPriorityBandConfig(newTestPluginsHandle(t), dynamicPrio)
+	newBandCfg, err := NewPriorityBandConfig(newTestPolicyDefaults(), dynamicPrio)
 	require.NoError(t, err)
 	h.shard.config.PriorityBands[dynamicPrio] = newBandCfg
 

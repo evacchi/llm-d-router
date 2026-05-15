@@ -74,7 +74,6 @@ import (
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/flowcontrol/registry"
 	fwkdl "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/flowcontrol"
-	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/flowcontrol/fairness/globalstrict"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/flowcontrol/ordering/fcfs"
@@ -194,7 +193,7 @@ func (r *benchRequest) ReceivedTimestamp() time.Time                   { return 
 func setupRegistry(
 	ctx context.Context,
 	b *testing.B,
-	handle plugin.Handle,
+	defaults *registry.PolicyDefaults,
 	s shardCount,
 	p priorityLevels,
 ) contracts.FlowRegistry {
@@ -207,7 +206,7 @@ func setupRegistry(
 
 	for i := 0; i < int(p); i++ {
 		band, err := registry.NewPriorityBandConfig(
-			handle, i,
+			defaults, i,
 			registry.WithBandMaxBytes(10_000_000_000), // Prevent capacity-based rejections.
 		)
 		if err != nil {
@@ -216,7 +215,7 @@ func setupRegistry(
 		cfgOpts = append(cfgOpts, registry.WithPriorityBand(band))
 	}
 
-	regCfg, err := registry.NewConfig(handle, cfgOpts...)
+	regCfg, err := registry.NewConfig(defaults, cfgOpts...)
 	if err != nil {
 		b.Fatalf("Failed to create registry config: %v", err)
 	}
@@ -255,7 +254,12 @@ func setupBenchmarkHarness(
 	}
 	handle.AddPlugin(registry.DefaultOrderingPolicyRef, oPolicy)
 
-	reg := setupRegistry(ctx, b, handle, s, p)
+	defaults := &registry.PolicyDefaults{
+		OrderingPolicy: oPolicy.(flowcontrol.OrderingPolicy),
+		FairnessPolicy: fPolicy.(flowcontrol.FairnessPolicy),
+	}
+
+	reg := setupRegistry(ctx, b, defaults, s, p)
 
 	detector := customDetector
 	if detector == nil {

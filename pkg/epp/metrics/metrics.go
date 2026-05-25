@@ -292,7 +292,7 @@ var inferenceExtensionInfo = prometheus.NewGaugeVec(
 		Name:      "info",
 		Help:      metricsutil.HelpMsgWithStability("General information of the current build of Inference Extension.", compbasemetrics.ALPHA),
 	},
-	[]string{"commit", "build_ref"},
+	[]string{"commit", "build_ref", "deployment_version"},
 )
 
 // --- Flow Control Metrics ---
@@ -661,9 +661,9 @@ func RecordPluginProcessingLatency(extensionPoint, pluginType, pluginName string
 	llmdPluginProcessingLatencies.WithLabelValues(extensionPoint, pluginType, pluginName).Observe(duration.Seconds())
 }
 
-func RecordInferenceExtensionInfo(commitSha, buildRef string) {
-	inferenceExtensionInfo.WithLabelValues(commitSha, buildRef).Set(1)
-	llmdInferenceExtensionInfo.WithLabelValues(commitSha, buildRef).Set(1)
+func RecordInferenceExtensionInfo(commitSha, buildRef, deploymentVersion string) {
+	inferenceExtensionInfo.WithLabelValues(commitSha, buildRef, deploymentVersion).Set(1)
+	llmdInferenceExtensionInfo.WithLabelValues(commitSha, buildRef, deploymentVersion).Set(1)
 }
 
 // RecordFlowControlRequestQueueDuration records the duration a request spent in the Flow Control layer.

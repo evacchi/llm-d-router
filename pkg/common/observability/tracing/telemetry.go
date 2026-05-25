@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
@@ -85,12 +86,19 @@ func InitTracing(ctx context.Context, logger logr.Logger, defaultServiceName str
 		loggerWrap.Handle(fmt.Errorf("unsupported sampler type: %s, fallback to parentbased_traceidratio with 0.1 Ratio", samplerType))
 	}
 
+	resourceAttrs := []attribute.KeyValue{
+		semconv.ServiceVersionKey.String(version.BuildRef),
+	}
+	if v, ok := os.LookupEnv("DEPLOYMENT_VERSION"); ok && v != "" {
+		resourceAttrs = append(resourceAttrs, attribute.String("llm_d.deployment_version", v))
+	}
+
 	opt := []sdktrace.TracerProviderOption{
 		sdktrace.WithBatcher(traceExporter),
 		sdktrace.WithSampler(sampler),
 		sdktrace.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceVersionKey.String(version.BuildRef),
+			resourceAttrs...,
 		)),
 	}
 

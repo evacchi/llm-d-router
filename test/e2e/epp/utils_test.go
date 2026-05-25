@@ -620,3 +620,73 @@ func generateSequence(start int, count int) []int {
 	}
 	return nums
 }
+
+// findReadyPodByLabel finds the first ready pod matching the given app label.
+func findReadyPodByLabel(appLabel string) *corev1.Pod {
+	var readyPod *corev1.Pod
+	gomega.Eventually(func(g gomega.Gomega) {
+		podList := &corev1.PodList{}
+		err := testConfig.K8sClient.List(testConfig.Context, podList,
+			client.InNamespace(testConfig.NsName), client.MatchingLabels{"app": appLabel})
+		g.Expect(err).NotTo(gomega.HaveOccurred())
+
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					g.Expect(pod.Status.PodIP).NotTo(gomega.BeEmpty())
+					readyPod = pod
+					return
+				}
+			}
+		}
+		g.Expect(readyPod).NotTo(gomega.BeNil(), "No ready pod found with app=%s", appLabel)
+	}, testConfig.ReadyTimeout, testConfig.Interval).Should(gomega.Succeed())
+	return readyPod
+}
+
+// verifyDeploymentVersionMetric scrapes the metrics endpoint of an EPP pod
+// identified by its app label and asserts that both info metrics contain the
+// expected deployment_version label value.
+func verifyDeploymentVersionMetric(appLabel, expectedVersion string) {
+	pod := findReadyPodByLabel(appLabel)
+
+	token := ""
+	gomega.Eventually(func(g gomega.Gomega) {
+		t, err := getMetricsReaderToken(testConfig.K8sClient)
+		g.Expect(err).NotTo(gomega.HaveOccurred())
+		g.Expect(t).NotTo(gomega.BeEmpty())
+		token = t
+	}, testConfig.ExistsTimeout, testConfig.Interval).Should(gomega.Succeed())
+
+	metricScrapeCmd := getMetricsScrapeCommand(pod.Status.PodIP, token)
+
+	expectedDeprecated := fmt.Sprintf(`deployment_version="%s"`, expectedVersion)
+	expectedInfoMetrics := []string{
+		"inference_extension_info",
+		"llm_d_router_epp_info",
+	}
+
+	gomega.Eventually(func() error {
+		resp, err := igwtestutils.ExecCommandInPod(testConfig, curlPodName, curlPodName, metricScrapeCmd)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(resp, statusOK) {
+			return fmt.Errorf("expected HTTP 200, got: %s", resp)
+		}
+		for _, metricName := range expectedInfoMetrics {
+			found := false
+			for _, line := range strings.Split(resp, "\n") {
+				if strings.HasPrefix(line, metricName+"{") && strings.Contains(line, expectedDeprecated) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("metric %s with %s not found in output", metricName, expectedDeprecated)
+			}
+		}
+		return nil
+	}, testConfig.ReadyTimeout, curlInterval).Should(gomega.Succeed())
+}

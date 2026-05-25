@@ -2,7 +2,7 @@ apiVersion: inference.networking.k8s.io/v1
 kind: InferencePool
 metadata:
   labels:
-  name: vllm-qwen3-32b
+  name: vllm-qwen3-32b-canary
 spec:
   targetPorts:
     - number: 8000
@@ -10,7 +10,7 @@ spec:
     matchLabels:
       app: vllm-qwen3-32b
   endpointPickerRef:
-    name: vllm-qwen3-32b-epp
+    name: vllm-qwen3-32b-epp-canary
     namespace: $E2E_NS
     kind: Service
     port:
@@ -19,11 +19,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: vllm-qwen3-32b-epp
+  name: vllm-qwen3-32b-epp-canary
   namespace: $E2E_NS
 spec:
   selector:
-    app: vllm-qwen3-32b-epp
+    app: vllm-qwen3-32b-epp-canary
   ports:
     - protocol: TCP
       port: 9002
@@ -34,13 +34,13 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: vllm-qwen3-32b-epp
+  name: vllm-qwen3-32b-epp-canary
   namespace: $E2E_NS
 ---
 kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: pod-read
+  name: pod-read-canary
   namespace: $E2E_NS
 rules:
 - apiGroups: [ "inference.networking.x-k8s.io" ]
@@ -59,42 +59,24 @@ rules:
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: pod-read-binding
+  name: pod-read-binding-canary
   namespace: $E2E_NS
 subjects:
 - kind: ServiceAccount
-  name: vllm-qwen3-32b-epp
+  name: vllm-qwen3-32b-epp-canary
   namespace: $E2E_NS
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: pod-read
----
-kind: ClusterRole
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: auth-reviewer
-rules:
-- apiGroups:
-  - authentication.k8s.io
-  resources:
-  - tokenreviews
-  verbs:
-  - create
-- apiGroups:
-  - authorization.k8s.io
-  resources:
-  - subjectaccessreviews
-  verbs:
-  - create
+  name: pod-read-canary
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: auth-reviewer-binding
+  name: auth-reviewer-binding-canary
 subjects:
 - kind: ServiceAccount
-  name: vllm-qwen3-32b-epp
+  name: vllm-qwen3-32b-epp-canary
   namespace: $E2E_NS
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -104,7 +86,7 @@ roleRef:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: plugins-config
+  name: plugins-config-canary
   namespace: $E2E_NS
 data:
   default-plugins.yaml: |
@@ -124,22 +106,21 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vllm-qwen3-32b-epp
+  name: vllm-qwen3-32b-epp-canary
   namespace: $E2E_NS
   labels:
-    app: vllm-qwen3-32b-epp
+    app: vllm-qwen3-32b-epp-canary
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: vllm-qwen3-32b-epp
+      app: vllm-qwen3-32b-epp-canary
   template:
     metadata:
       labels:
-        app: vllm-qwen3-32b-epp
+        app: vllm-qwen3-32b-epp-canary
     spec:
-      serviceAccountName: vllm-qwen3-32b-epp
-      # Conservatively, this timeout should mirror the longest grace period of the pods within the pool
+      serviceAccountName: vllm-qwen3-32b-epp-canary
       terminationGracePeriodSeconds: 130
       containers:
       - name: epp
@@ -147,7 +128,7 @@ spec:
         imagePullPolicy: IfNotPresent
         args:
         - --pool-name
-        - "vllm-qwen3-32b"
+        - "vllm-qwen3-32b-canary"
         - --pool-namespace
         - "$E2E_NS"
         - --v
@@ -162,7 +143,7 @@ spec:
         - "/config/default-plugins.yaml"
         env:
         - name: DEPLOYMENT_VERSION
-          value: "stable"
+          value: "canary"
         ports:
         - containerPort: 9002
         - containerPort: 9003
@@ -186,4 +167,4 @@ spec:
       volumes:
       - name: plugins-config-volume
         configMap:
-          name: plugins-config
+          name: plugins-config-canary

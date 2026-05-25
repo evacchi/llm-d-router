@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
@@ -38,6 +39,9 @@ import (
 const (
 	argPort             = "--port"
 	argDataParallelSize = "--data-parallel-size"
+
+	canaryInferExtName     = "vllm-qwen3-32b-epp-canary"
+	canaryInferExtManifest = "../../testdata/inferencepool-canary-e2e.yaml"
 )
 
 var _ = ginkgo.Describe("InferencePool", func() {
@@ -186,6 +190,74 @@ var _ = ginkgo.Describe("InferencePool", func() {
 
 		ginkgo.It("Should expose EPP metrics after generating traffic", func() {
 			verifyMetrics()
+		})
+	})
+
+	ginkgo.When("Canary deployment is simulated", func() {
+		ginkgo.It("Should expose distinct deployment_version in metrics for stable and canary EPPs", func() {
+			ginkgo.By("STEP 1: Verifying stable EPP has deployment_version=stable in metrics")
+			verifyDeploymentVersionMetric(inferExtName, "stable")
+
+			ginkgo.By("STEP 2: Deploying canary EPP alongside stable")
+			inManifests := igwtestutils.ReadYaml(canaryInferExtManifest)
+			replacer := strings.NewReplacer(
+				"$E2E_NS", testConfig.NsName,
+				"$E2E_IMAGE", e2eImage,
+			)
+			outManifests := make([]string, 0, len(inManifests))
+			for _, manifest := range inManifests {
+				outManifests = append(outManifests, replacer.Replace(manifest))
+			}
+			igwtestutils.CreateObjsFromYaml(testConfig, outManifests)
+
+			canaryDeploy := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      canaryInferExtName,
+					Namespace: testConfig.NsName,
+				},
+			}
+			igwtestutils.DeploymentAvailable(testConfig, canaryDeploy)
+
+			ginkgo.By("STEP 3: Verifying canary EPP has deployment_version=canary in metrics")
+			verifyDeploymentVersionMetric(canaryInferExtName, "canary")
+
+			ginkgo.By("STEP 4: Promoting canary — scaling down stable EPP to 0")
+			stableDeploy := &appsv1.Deployment{}
+			gomega.Eventually(func() error {
+				if err := testConfig.K8sClient.Get(testConfig.Context,
+					types.NamespacedName{Name: inferExtName, Namespace: testConfig.NsName}, stableDeploy); err != nil {
+					return err
+				}
+				zero := int32(0)
+				stableDeploy.Spec.Replicas = &zero
+				return testConfig.K8sClient.Update(testConfig.Context, stableDeploy)
+			}, testConfig.ExistsTimeout, testConfig.Interval).Should(gomega.Succeed())
+
+			gomega.Eventually(func(g gomega.Gomega) {
+				d := &appsv1.Deployment{}
+				err := testConfig.K8sClient.Get(testConfig.Context,
+					types.NamespacedName{Name: inferExtName, Namespace: testConfig.NsName}, d)
+				g.Expect(err).NotTo(gomega.HaveOccurred())
+				g.Expect(d.Status.Replicas).To(gomega.Equal(int32(0)), "Stable EPP should have 0 replicas")
+			}, testConfig.ReadyTimeout, testConfig.Interval).Should(gomega.Succeed())
+
+			ginkgo.By("STEP 5: Verifying canary EPP is still serving with deployment_version=canary")
+			verifyDeploymentVersionMetric(canaryInferExtName, "canary")
+
+			ginkgo.By("STEP 6: Cleanup — restoring stable EPP replicas")
+			gomega.Eventually(func() error {
+				if err := testConfig.K8sClient.Get(testConfig.Context,
+					types.NamespacedName{Name: inferExtName, Namespace: testConfig.NsName}, stableDeploy); err != nil {
+					return err
+				}
+				one := int32(1)
+				stableDeploy.Spec.Replicas = &one
+				return testConfig.K8sClient.Update(testConfig.Context, stableDeploy)
+			}, testConfig.ExistsTimeout, testConfig.Interval).Should(gomega.Succeed())
+
+			waitForDeploymentReady(testConfig, &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: inferExtName, Namespace: testConfig.NsName},
+			})
 		})
 	})
 

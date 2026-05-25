@@ -224,6 +224,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+        {{- if .Values.router.epp.deploymentVersionLabel }}
+            - name: DEPLOYMENT_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['{{ .Values.router.epp.deploymentVersionLabel }}']
+        {{- end }}
         {{- include "llm-d-router.latencyPredictor.env" . | nindent 12 }}
         {{- if .Values.router.tracing.enabled }}
             - name: OTEL_SERVICE_NAME

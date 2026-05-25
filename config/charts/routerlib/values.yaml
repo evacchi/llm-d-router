@@ -26,6 +26,11 @@ epp:
   #  # Log verbosity
   #  v: 2
   
+  # Label key used to read the deployment version from the pod's own labels
+  # via the Kubernetes downward API. Set to empty string to disable.
+  # The label is typically set by KServe's propagateDeploymentMetadata().
+  deploymentVersionLabel: ""
+
   # Example environment variables:
   # env:
   #   ENABLE_EXPERIMENTAL_FEATURE: "true"

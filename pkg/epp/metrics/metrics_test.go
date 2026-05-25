@@ -1243,6 +1243,34 @@ func TestFlowControlPoolSaturationMetric(t *testing.T) {
 	require.Equal(t, 0.5, valNew)
 }
 
+func TestRecordInferenceExtensionInfo(t *testing.T) {
+	Reset()
+
+	RecordInferenceExtensionInfo("abc123", "v1.0.0", "canary-v2")
+
+	val, err := testutil.GetGaugeMetricValue(inferenceExtensionInfo.WithLabelValues("abc123", "v1.0.0", "canary-v2"))
+	require.NoError(t, err)
+	require.Equal(t, 1.0, val)
+
+	valNew, err := testutil.GetGaugeMetricValue(llmdInferenceExtensionInfo.WithLabelValues("abc123", "v1.0.0", "canary-v2"))
+	require.NoError(t, err)
+	require.Equal(t, 1.0, valNew)
+}
+
+func TestRecordInferenceExtensionInfoEmptyVersion(t *testing.T) {
+	Reset()
+
+	RecordInferenceExtensionInfo("abc123", "v1.0.0", "")
+
+	val, err := testutil.GetGaugeMetricValue(inferenceExtensionInfo.WithLabelValues("abc123", "v1.0.0", ""))
+	require.NoError(t, err)
+	require.Equal(t, 1.0, val)
+
+	valNew, err := testutil.GetGaugeMetricValue(llmdInferenceExtensionInfo.WithLabelValues("abc123", "v1.0.0", ""))
+	require.NoError(t, err)
+	require.Equal(t, 1.0, valNew)
+}
+
 func TestInferenceModelRewriteDecisionsTotalMetric(t *testing.T) {
 	Reset()
 

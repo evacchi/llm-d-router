@@ -297,7 +297,7 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 	// --- Setup Metrics Server ---
 	r.customCollectors = append(r.customCollectors, collectors.NewInferencePoolMetricsCollector(ds))
 	metrics.Register(r.customCollectors...)
-	metrics.RecordInferenceExtensionInfo(version.CommitSHA, version.BuildRef)
+	metrics.RecordInferenceExtensionInfo(version.CommitSHA, version.BuildRef, os.Getenv("DEPLOYMENT_VERSION"))
 	// Register metrics handler.
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:

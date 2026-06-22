@@ -2,20 +2,17 @@ package wasm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"oras.land/oras-go/v2"
-	"oras.land/oras-go/v2/content/file"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/registry/remote"
 )
 
-const wasmMediaType = "application/vnd.wasm.content.layer.v1+wasm"
-
 // LoadModule loads a Wasm module from an OCI reference or a local file path.
-// References containing a "/" are treated as OCI; otherwise as local paths.
 func LoadModule(ctx context.Context, ref string, plainHTTP bool) ([]byte, error) {
 	if isLocalPath(ref) {
 		return os.ReadFile(ref)
@@ -40,30 +37,40 @@ func pullFromOCI(ctx context.Context, ref string, plainHTTP bool) ([]byte, error
 	}
 	repo.PlainHTTP = plainHTTP
 
-	cacheDir, err := wasmCacheDir()
-	if err != nil {
-		return nil, fmt.Errorf("creating cache directory: %w", err)
-	}
-
-	store, err := file.New(cacheDir)
-	if err != nil {
-		return nil, fmt.Errorf("creating file store at %q: %w", cacheDir, err)
-	}
-	defer store.Close()
-
 	tag := tagFromRef(ref)
-	desc, err := oras.Copy(ctx, repo, tag, store, tag, oras.DefaultCopyOptions)
+
+	manifestDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		return nil, fmt.Errorf("pulling %q: %w", ref, err)
+		return nil, fmt.Errorf("resolving %q: %w", ref, err)
 	}
 
-	// The pulled artifact lands as a file named by its digest in the cache dir.
-	digestFile := filepath.Join(cacheDir, desc.Digest.Encoded())
-	data, err := os.ReadFile(digestFile)
+	manifestRC, err := repo.Fetch(ctx, manifestDesc)
 	if err != nil {
-		return nil, fmt.Errorf("reading cached module %q: %w", digestFile, err)
+		return nil, fmt.Errorf("fetching manifest for %q: %w", ref, err)
 	}
-	return data, nil
+	manifestBytes, err := io.ReadAll(manifestRC)
+	manifestRC.Close()
+	if err != nil {
+		return nil, fmt.Errorf("reading manifest for %q: %w", ref, err)
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return nil, fmt.Errorf("parsing manifest for %q: %w", ref, err)
+	}
+
+	if len(manifest.Layers) == 0 {
+		return nil, fmt.Errorf("no layers in manifest for %q", ref)
+	}
+
+	layerDesc := manifest.Layers[0]
+	layerRC, err := repo.Fetch(ctx, layerDesc)
+	if err != nil {
+		return nil, fmt.Errorf("fetching wasm layer from %q: %w", ref, err)
+	}
+	defer layerRC.Close()
+
+	return io.ReadAll(layerRC)
 }
 
 func tagFromRef(ref string) string {
@@ -71,20 +78,4 @@ func tagFromRef(ref string) string {
 		return ref[i+1:]
 	}
 	return "latest"
-}
-
-func wasmCacheDir() (string, error) {
-	dir := os.Getenv("XDG_CACHE_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		dir = filepath.Join(home, ".cache")
-	}
-	cacheDir := filepath.Join(dir, "llm-d", "wasm")
-	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
-		return "", err
-	}
-	return cacheDir, nil
 }

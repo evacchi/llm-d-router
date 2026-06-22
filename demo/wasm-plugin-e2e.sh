@@ -102,8 +102,9 @@ build_and_push() {
             -o "${ROOT_DIR}/demo/demo-filter.wasm" .)
 
     info "Pushing demo-filter:latest (${version}) to localhost:${REGISTRY_PORT}..."
-    oras push --plain-http "localhost:${REGISTRY_PORT}/demo-filter:latest" \
-        "${ROOT_DIR}/demo/demo-filter.wasm:application/vnd.wasm.content.layer.v1+wasm"
+    (cd "${ROOT_DIR}/demo" && \
+        oras push --plain-http "localhost:${REGISTRY_PORT}/demo-filter:latest" \
+            "demo-filter.wasm:application/vnd.wasm.content.layer.v1+wasm")
 }
 
 # ── Pod Labels ───────────────────────────────────────────────────────

@@ -52,10 +52,18 @@ kubectl kustomize "${ROOT_DIR}/deploy/components/monitoring" \
 
 # ── Import Grafana dashboard via provisioning ConfigMap ──────────────
 
-info "Creating dashboard ConfigMap..."
+info "Creating dashboard ConfigMaps..."
 kubectl --context "${KUBE_CONTEXT}" -n monitoring \
     create configmap llm-d-dashboard \
         --from-file=inference-gateway.json="${ROOT_DIR}/deploy/grafana/inference_gateway.json" \
+        --dry-run=client -o yaml \
+    | kubectl --context "${KUBE_CONTEXT}" -n monitoring label --local -f - \
+        grafana_dashboard=1 -o yaml --dry-run=client \
+    | kubectl --context "${KUBE_CONTEXT}" -n monitoring apply -f -
+
+kubectl --context "${KUBE_CONTEXT}" -n monitoring \
+    create configmap wasm-demo-dashboard \
+        --from-file=wasm-demo.json="${ROOT_DIR}/deploy/grafana/wasm_demo.json" \
         --dry-run=client -o yaml \
     | kubectl --context "${KUBE_CONTEXT}" -n monitoring label --local -f - \
         grafana_dashboard=1 -o yaml --dry-run=client \

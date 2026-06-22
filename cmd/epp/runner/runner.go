@@ -123,6 +123,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/sessionaffinity"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/tokenload"
 	testfilter "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/test/filter"
+	wasmplug "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/wasm"
 	"github.com/llm-d/llm-d-router/pkg/epp/handlers"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics/collectors"
@@ -577,6 +578,10 @@ func (r *Runner) registerInTreePlugins() {
 	fwkplugin.Register(discoveryfile.PluginType, discoveryfile.Factory)
 	// register pre-admission processor plugins
 	fwkplugin.Register(agentidentity.PluginType, agentidentity.PluginFactory)
+
+	// wasm dynamic plugins
+	fwkplugin.Register(wasmplug.WasmFilterType, wasmplug.WasmFilterFactory)
+	fwkplugin.Register(wasmplug.WasmScorerType, wasmplug.WasmScorerFactory)
 }
 
 func (r *Runner) parseConfigurationPhaseOne(ctx context.Context, opts *runserver.Options) (*configapi.EndpointPickerConfig, error) {

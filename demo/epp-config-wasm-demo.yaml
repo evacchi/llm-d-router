@@ -1,0 +1,18 @@
+# EPP configuration for the wasm plugin e2e demo.
+# The wasm-filter pulls a .wasm module from the in-cluster OCI registry.
+#
+apiVersion: llm-d.ai/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+- type: wasm-filter
+  name: demo-filter
+  parameters:
+    module: "wasm-registry.default.svc.cluster.local:5000/demo-filter:latest"
+    plainHTTP: true
+- type: max-score-picker
+- type: single-profile-handler
+schedulingProfiles:
+- name: default
+  plugins:
+  - pluginRef: demo-filter
+  - pluginRef: max-score-picker

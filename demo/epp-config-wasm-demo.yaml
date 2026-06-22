@@ -9,10 +9,12 @@ plugins:
   parameters:
     module: "wasm-registry.default.svc.cluster.local:5000/demo-filter:latest"
     plainHTTP: true
+- type: load-aware-scorer
 - type: max-score-picker
 - type: single-profile-handler
 schedulingProfiles:
 - name: default
   plugins:
   - pluginRef: demo-filter
+  - pluginRef: load-aware-scorer
   - pluginRef: max-score-picker

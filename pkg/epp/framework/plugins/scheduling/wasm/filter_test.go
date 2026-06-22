@@ -62,7 +62,7 @@ func TestWasmFilter(t *testing.T) {
 	assert.Equal(t, "pod-a100-2", result[1].GetMetadata().NamespacedName.Name)
 }
 
-func TestWasmFilterFallbackWhenNoMatch(t *testing.T) {
+func TestWasmFilterEmptyWhenNoMatch(t *testing.T) {
 	wasmBytes, err := os.ReadFile("testdata/label-filter.wasm")
 	require.NoError(t, err)
 
@@ -88,5 +88,5 @@ func TestWasmFilterFallbackWhenNoMatch(t *testing.T) {
 	req := &fwksched.InferenceRequest{RequestID: "req-2", TargetModel: "llama"}
 	result := f.Filter(ctx, req, endpoints)
 
-	assert.Len(t, result, 1, "filter should fall back to all endpoints when no a100 match")
+	assert.Empty(t, result, "filter should return empty when no a100 match")
 }

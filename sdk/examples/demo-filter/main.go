@@ -13,12 +13,7 @@ func init() {
 		guest.LogMessage("wasm-filter " + filterVersion + ": keeping " + filterTier + "-tier endpoints")
 		var keep []string
 		for _, ep := range eps {
-			if ep.Labels["tier"] == filterTier {
-				keep = append(keep, ep.ID)
-			}
-		}
-		if len(keep) == 0 {
-			for _, ep := range eps {
+			if filterTier == "" || ep.Labels["tier"] == filterTier {
 				keep = append(keep, ep.ID)
 			}
 		}

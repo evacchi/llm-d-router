@@ -12,11 +12,6 @@ func init() {
 				keep = append(keep, ep.ID)
 			}
 		}
-		if len(keep) == 0 {
-			for _, ep := range eps {
-				keep = append(keep, ep.ID)
-			}
-		}
 		return keep
 	})
 }

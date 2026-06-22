@@ -10,5 +10,5 @@ spec:
       app: ${EPP_NAME}
   endpoints:
   - port: metrics
-    interval: 15s
+    interval: 5s
     path: /metrics

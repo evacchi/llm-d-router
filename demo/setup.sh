@@ -55,11 +55,23 @@ info "Waiting for registry rollout..."
 kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
     rollout status deployment/wasm-registry --timeout=120s
 
+# ── Scale model servers to 2 replicas ────────────────────────────────
+
+current=$(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    get deployment vllm-d -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
+if [[ "${current}" -lt 2 ]]; then
+    info "Scaling vllm-d to 2 replicas..."
+    kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+        scale deployment/vllm-d --replicas=2
+    kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+        rollout status deployment/vllm-d --timeout=120s
+fi
+
 # ── Label pods ───────────────────────────────────────────────────────
 
 info "Labeling model server pods..."
 pods=$(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
-    get pods -l app -o jsonpath='{.items[*].metadata.name}')
+    get pods -l app -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 
 i=0
 for pod in ${pods}; do

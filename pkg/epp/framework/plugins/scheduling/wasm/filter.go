@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -16,21 +18,21 @@ const WasmFilterType = "wasm-filter"
 var _ scheduling.Filter = &WasmFilter{}
 
 type wasmFilterParams struct {
-	Module    string `json:"module"`
-	PlainHTTP bool   `json:"plainHTTP,omitempty"`
+	Module             string `json:"module,omitempty"`
+	PlainHTTP          bool   `json:"plainHTTP,omitempty"`
+	ConfigMapName      string `json:"configMapName,omitempty"`
+	ConfigMapNamespace string `json:"configMapNamespace,omitempty"`
+	ConfigMapKey       string `json:"configMapKey,omitempty"`
 }
 
 // WasmFilterFactory creates a WasmFilter by loading and compiling a Wasm module.
 func WasmFilterFactory(name string, rawParameters *json.Decoder, handle plugin.Handle) (plugin.Plugin, error) {
 	var params wasmFilterParams
 	if rawParameters == nil {
-		return nil, fmt.Errorf("%s: 'module' parameter is required", WasmFilterType)
+		return nil, fmt.Errorf("%s: parameters are required", WasmFilterType)
 	}
 	if err := rawParameters.Decode(&params); err != nil {
 		return nil, fmt.Errorf("%s: failed to parse parameters: %w", WasmFilterType, err)
-	}
-	if params.Module == "" {
-		return nil, fmt.Errorf("%s: 'module' parameter is required", WasmFilterType)
 	}
 
 	ctx := context.Background()
@@ -38,26 +40,60 @@ func WasmFilterFactory(name string, rawParameters *json.Decoder, handle plugin.H
 		ctx = handle.Context()
 	}
 
-	wasmBytes, err := LoadModule(ctx, params.Module, params.PlainHTTP)
-	if err != nil {
-		return nil, fmt.Errorf("%s: loading module %q: %w", WasmFilterType, params.Module, err)
-	}
-
-	compiled, err := NewCompiledPlugin(ctx, wasmBytes)
-	if err != nil {
-		return nil, fmt.Errorf("%s: compiling module %q: %w", WasmFilterType, params.Module, err)
-	}
-
-	return &WasmFilter{
+	f := &WasmFilter{
 		typedName: plugin.TypedName{Type: WasmFilterType, Name: name},
-		compiled:  compiled,
-	}, nil
+	}
+
+	if params.ConfigMapName != "" {
+		ref := configMapRef{
+			Namespace: params.ConfigMapNamespace,
+			Name:      params.ConfigMapName,
+			Key:       params.ConfigMapKey,
+		}
+		if ref.Key == "" {
+			ref.Key = "config.json"
+		}
+		if ref.Namespace == "" {
+			ref.Namespace = "default"
+		}
+		go watchConfigMap(ctx, ref, func(cfg moduleConfig) error {
+			return f.loadAndSwap(ctx, cfg.Module, cfg.PlainHTTP)
+		}, log.FromContext(ctx))
+	} else {
+		if params.Module == "" {
+			return nil, fmt.Errorf("%s: 'module' or 'configMapName' parameter is required", WasmFilterType)
+		}
+		if err := f.loadAndSwap(ctx, params.Module, params.PlainHTTP); err != nil {
+			return nil, fmt.Errorf("%s: %w", WasmFilterType, err)
+		}
+	}
+
+	return f, nil
 }
 
 // WasmFilter implements scheduling.Filter by delegating to a Wasm module.
 type WasmFilter struct {
 	typedName plugin.TypedName
-	compiled  *CompiledPlugin
+	compiled  atomic.Pointer[CompiledPlugin]
+}
+
+func (f *WasmFilter) loadAndSwap(ctx context.Context, module string, plainHTTP bool) error {
+	wasmBytes, err := LoadModule(ctx, module, plainHTTP)
+	if err != nil {
+		return fmt.Errorf("loading module %q: %w", module, err)
+	}
+	newCompiled, err := NewCompiledPlugin(ctx, wasmBytes)
+	if err != nil {
+		return fmt.Errorf("compiling module %q: %w", module, err)
+	}
+	old := f.compiled.Swap(newCompiled)
+	if old != nil {
+		go func() {
+			time.Sleep(5 * time.Second)
+			old.Close(context.Background()) //nolint:errcheck
+		}()
+	}
+	return nil
 }
 
 func (f *WasmFilter) TypedName() plugin.TypedName {
@@ -66,6 +102,11 @@ func (f *WasmFilter) TypedName() plugin.TypedName {
 
 func (f *WasmFilter) Filter(ctx context.Context, request *scheduling.InferenceRequest, endpoints []scheduling.Endpoint) []scheduling.Endpoint {
 	logger := log.FromContext(ctx)
+	compiled := f.compiled.Load()
+	if compiled == nil {
+		logger.Error(nil, "wasm filter: no compiled module available, passing through")
+		return endpoints
+	}
 
 	input := ABIFilterInput{
 		Request:   toABIRequest(request),
@@ -77,12 +118,12 @@ func (f *WasmFilter) Filter(ctx context.Context, request *scheduling.InferenceRe
 		return endpoints
 	}
 
-	inst, err := f.compiled.getInstance(ctx)
+	inst, err := compiled.getInstance(ctx)
 	if err != nil {
 		logger.Error(err, "wasm filter: failed to get instance")
 		return endpoints
 	}
-	defer f.compiled.putInstance(inst)
+	defer compiled.putInstance(inst)
 
 	if inst.filterFn == nil {
 		logger.Error(nil, "wasm filter: module does not export 'filter'")

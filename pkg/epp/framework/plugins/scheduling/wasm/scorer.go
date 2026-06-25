@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -16,28 +18,22 @@ const WasmScorerType = "wasm-scorer"
 var _ scheduling.Scorer = &WasmScorer{}
 
 type wasmScorerParams struct {
-	Module    string                   `json:"module"`
-	Category  scheduling.ScorerCategory `json:"category"`
-	PlainHTTP bool                     `json:"plainHTTP,omitempty"`
+	Module             string                    `json:"module,omitempty"`
+	Category           scheduling.ScorerCategory `json:"category,omitempty"`
+	PlainHTTP          bool                      `json:"plainHTTP,omitempty"`
+	ConfigMapName      string                    `json:"configMapName,omitempty"`
+	ConfigMapNamespace string                    `json:"configMapNamespace,omitempty"`
+	ConfigMapKey       string                    `json:"configMapKey,omitempty"`
 }
 
 // WasmScorerFactory creates a WasmScorer by loading and compiling a Wasm module.
 func WasmScorerFactory(name string, rawParameters *json.Decoder, handle plugin.Handle) (plugin.Plugin, error) {
 	var params wasmScorerParams
 	if rawParameters == nil {
-		return nil, fmt.Errorf("%s: 'module' and 'category' parameters are required", WasmScorerType)
+		return nil, fmt.Errorf("%s: parameters are required", WasmScorerType)
 	}
 	if err := rawParameters.Decode(&params); err != nil {
 		return nil, fmt.Errorf("%s: failed to parse parameters: %w", WasmScorerType, err)
-	}
-	if params.Module == "" {
-		return nil, fmt.Errorf("%s: 'module' parameter is required", WasmScorerType)
-	}
-
-	switch params.Category {
-	case scheduling.Affinity, scheduling.Distribution, scheduling.Balance:
-	default:
-		return nil, fmt.Errorf("%s: invalid category %q (must be Affinity, Distribution, or Balance)", WasmScorerType, params.Category)
 	}
 
 	ctx := context.Background()
@@ -45,28 +41,68 @@ func WasmScorerFactory(name string, rawParameters *json.Decoder, handle plugin.H
 		ctx = handle.Context()
 	}
 
-	wasmBytes, err := LoadModule(ctx, params.Module, params.PlainHTTP)
-	if err != nil {
-		return nil, fmt.Errorf("%s: loading module %q: %w", WasmScorerType, params.Module, err)
-	}
-
-	compiled, err := NewCompiledPlugin(ctx, wasmBytes)
-	if err != nil {
-		return nil, fmt.Errorf("%s: compiling module %q: %w", WasmScorerType, params.Module, err)
-	}
-
-	return &WasmScorer{
+	s := &WasmScorer{
 		typedName: plugin.TypedName{Type: WasmScorerType, Name: name},
-		compiled:  compiled,
-		category:  params.Category,
-	}, nil
+	}
+
+	if params.ConfigMapName != "" {
+		ref := configMapRef{
+			Namespace: params.ConfigMapNamespace,
+			Name:      params.ConfigMapName,
+			Key:       params.ConfigMapKey,
+		}
+		if ref.Key == "" {
+			ref.Key = "config.json"
+		}
+		if ref.Namespace == "" {
+			ref.Namespace = "default"
+		}
+		go watchConfigMap(ctx, ref, func(cfg moduleConfig) error {
+			return s.loadAndSwap(ctx, cfg.Module, cfg.PlainHTTP)
+		}, log.FromContext(ctx))
+	} else {
+		if params.Module == "" {
+			return nil, fmt.Errorf("%s: 'module' or 'configMapName' parameter is required", WasmScorerType)
+		}
+		switch params.Category {
+		case scheduling.Affinity, scheduling.Distribution, scheduling.Balance:
+		default:
+			return nil, fmt.Errorf("%s: invalid category %q", WasmScorerType, params.Category)
+		}
+		cat := params.Category
+		s.category.Store(&cat)
+		if err := s.loadAndSwap(ctx, params.Module, params.PlainHTTP); err != nil {
+			return nil, fmt.Errorf("%s: %w", WasmScorerType, err)
+		}
+	}
+
+	return s, nil
 }
 
 // WasmScorer implements scheduling.Scorer by delegating to a Wasm module.
 type WasmScorer struct {
 	typedName plugin.TypedName
-	compiled  *CompiledPlugin
-	category  scheduling.ScorerCategory
+	compiled  atomic.Pointer[CompiledPlugin]
+	category  atomic.Pointer[scheduling.ScorerCategory]
+}
+
+func (s *WasmScorer) loadAndSwap(ctx context.Context, module string, plainHTTP bool) error {
+	wasmBytes, err := LoadModule(ctx, module, plainHTTP)
+	if err != nil {
+		return fmt.Errorf("loading module %q: %w", module, err)
+	}
+	newCompiled, err := NewCompiledPlugin(ctx, wasmBytes)
+	if err != nil {
+		return fmt.Errorf("compiling module %q: %w", module, err)
+	}
+	old := s.compiled.Swap(newCompiled)
+	if old != nil {
+		go func() {
+			time.Sleep(5 * time.Second)
+			old.Close(context.Background()) //nolint:errcheck
+		}()
+	}
+	return nil
 }
 
 func (s *WasmScorer) TypedName() plugin.TypedName {
@@ -74,11 +110,19 @@ func (s *WasmScorer) TypedName() plugin.TypedName {
 }
 
 func (s *WasmScorer) Category() scheduling.ScorerCategory {
-	return s.category
+	if cat := s.category.Load(); cat != nil {
+		return *cat
+	}
+	return scheduling.Distribution
 }
 
 func (s *WasmScorer) Score(ctx context.Context, request *scheduling.InferenceRequest, endpoints []scheduling.Endpoint) map[scheduling.Endpoint]float64 {
 	logger := log.FromContext(ctx)
+	compiled := s.compiled.Load()
+	if compiled == nil {
+		logger.Error(nil, "wasm scorer: no compiled module available")
+		return nil
+	}
 
 	input := ABIScorerInput{
 		Request:   toABIRequest(request),
@@ -90,12 +134,12 @@ func (s *WasmScorer) Score(ctx context.Context, request *scheduling.InferenceReq
 		return nil
 	}
 
-	inst, err := s.compiled.getInstance(ctx)
+	inst, err := compiled.getInstance(ctx)
 	if err != nil {
 		logger.Error(err, "wasm scorer: failed to get instance")
 		return nil
 	}
-	defer s.compiled.putInstance(inst)
+	defer compiled.putInstance(inst)
 
 	if inst.scoreFn == nil {
 		logger.Error(nil, "wasm scorer: module does not export 'score'")

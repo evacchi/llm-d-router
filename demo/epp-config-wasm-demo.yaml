@@ -1,5 +1,6 @@
 # EPP configuration for the wasm plugin e2e demo.
-# The wasm-filter pulls a .wasm module from the in-cluster OCI registry.
+# The wasm-filter watches a ConfigMap for its OCI module reference.
+# Updating the ConfigMap triggers a hot-reload (no EPP restart needed).
 #
 apiVersion: llm-d.ai/v1alpha1
 kind: EndpointPickerConfig
@@ -7,8 +8,9 @@ plugins:
 - type: wasm-filter
   name: demo-filter
   parameters:
-    module: "wasm-registry.default.svc.cluster.local:5000/demo-filter:latest"
-    plainHTTP: true
+    configMapName: "wasm-filter-config"
+    configMapNamespace: "default"
+    configMapKey: "config.json"
 - type: load-aware-scorer
 - type: max-score-picker
 - type: single-profile-handler

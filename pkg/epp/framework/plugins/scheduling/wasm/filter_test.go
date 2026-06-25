@@ -13,16 +13,21 @@ import (
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-func TestWasmFilter(t *testing.T) {
-	wasmBytes, err := os.ReadFile("testdata/label-filter.wasm")
+func newTestFilter(t *testing.T, wasmFile string) *WasmFilter {
+	t.Helper()
+	wasmBytes, err := os.ReadFile(wasmFile)
 	require.NoError(t, err)
-
 	ctx := context.Background()
 	compiled, err := NewCompiledPlugin(ctx, wasmBytes)
 	require.NoError(t, err)
-	defer compiled.Close(ctx) //nolint:errcheck
+	t.Cleanup(func() { compiled.Close(ctx) }) //nolint:errcheck
+	f := &WasmFilter{}
+	f.compiled.Store(compiled)
+	return f
+}
 
-	f := &WasmFilter{compiled: compiled}
+func TestWasmFilter(t *testing.T) {
+	f := newTestFilter(t, "testdata/label-filter.wasm")
 
 	endpoints := []fwksched.Endpoint{
 		fwksched.NewEndpoint(
@@ -55,7 +60,7 @@ func TestWasmFilter(t *testing.T) {
 	}
 
 	req := &fwksched.InferenceRequest{RequestID: "req-1", TargetModel: "llama"}
-	result := f.Filter(ctx, req, endpoints)
+	result := f.Filter(context.Background(), req, endpoints)
 
 	require.Len(t, result, 2)
 	assert.Equal(t, "pod-a100", result[0].GetMetadata().NamespacedName.Name)
@@ -63,15 +68,7 @@ func TestWasmFilter(t *testing.T) {
 }
 
 func TestWasmFilterEmptyWhenNoMatch(t *testing.T) {
-	wasmBytes, err := os.ReadFile("testdata/label-filter.wasm")
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	compiled, err := NewCompiledPlugin(ctx, wasmBytes)
-	require.NoError(t, err)
-	defer compiled.Close(ctx) //nolint:errcheck
-
-	f := &WasmFilter{compiled: compiled}
+	f := newTestFilter(t, "testdata/label-filter.wasm")
 
 	endpoints := []fwksched.Endpoint{
 		fwksched.NewEndpoint(
@@ -86,7 +83,7 @@ func TestWasmFilterEmptyWhenNoMatch(t *testing.T) {
 	}
 
 	req := &fwksched.InferenceRequest{RequestID: "req-2", TargetModel: "llama"}
-	result := f.Filter(ctx, req, endpoints)
+	result := f.Filter(context.Background(), req, endpoints)
 
 	assert.Empty(t, result, "filter should return empty when no a100 match")
 }

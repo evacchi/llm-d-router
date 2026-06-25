@@ -13,16 +13,22 @@ import (
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-func TestWasmScorer(t *testing.T) {
-	wasmBytes, err := os.ReadFile("testdata/queue-scorer.wasm")
+func newTestScorer(t *testing.T, wasmFile string, category fwksched.ScorerCategory) *WasmScorer {
+	t.Helper()
+	wasmBytes, err := os.ReadFile(wasmFile)
 	require.NoError(t, err)
-
 	ctx := context.Background()
 	compiled, err := NewCompiledPlugin(ctx, wasmBytes)
 	require.NoError(t, err)
-	defer compiled.Close(ctx) //nolint:errcheck
+	t.Cleanup(func() { compiled.Close(ctx) }) //nolint:errcheck
+	s := &WasmScorer{}
+	s.compiled.Store(compiled)
+	s.category.Store(&category)
+	return s
+}
 
-	s := &WasmScorer{compiled: compiled, category: fwksched.Distribution}
+func TestWasmScorer(t *testing.T) {
+	s := newTestScorer(t, "testdata/queue-scorer.wasm", fwksched.Distribution)
 
 	endpoints := []fwksched.Endpoint{
 		fwksched.NewEndpoint(
@@ -46,7 +52,7 @@ func TestWasmScorer(t *testing.T) {
 	}
 
 	req := &fwksched.InferenceRequest{RequestID: "req-1", TargetModel: "llama"}
-	scores := s.Score(ctx, req, endpoints)
+	scores := s.Score(context.Background(), req, endpoints)
 
 	require.Len(t, scores, 2)
 	assert.InDelta(t, 0.0, scores[endpoints[0]], 0.001, "pod with queue=10 should score 0")
@@ -54,15 +60,7 @@ func TestWasmScorer(t *testing.T) {
 }
 
 func TestWasmScorerEqualQueues(t *testing.T) {
-	wasmBytes, err := os.ReadFile("testdata/queue-scorer.wasm")
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	compiled, err := NewCompiledPlugin(ctx, wasmBytes)
-	require.NoError(t, err)
-	defer compiled.Close(ctx) //nolint:errcheck
-
-	s := &WasmScorer{compiled: compiled, category: fwksched.Distribution}
+	s := newTestScorer(t, "testdata/queue-scorer.wasm", fwksched.Distribution)
 
 	endpoints := []fwksched.Endpoint{
 		fwksched.NewEndpoint(
@@ -86,7 +84,7 @@ func TestWasmScorerEqualQueues(t *testing.T) {
 	}
 
 	req := &fwksched.InferenceRequest{RequestID: "req-2", TargetModel: "llama"}
-	scores := s.Score(ctx, req, endpoints)
+	scores := s.Score(context.Background(), req, endpoints)
 
 	require.Len(t, scores, 2)
 	assert.InDelta(t, 1.0, scores[endpoints[0]], 0.001)
@@ -94,6 +92,6 @@ func TestWasmScorerEqualQueues(t *testing.T) {
 }
 
 func TestWasmScorerCategory(t *testing.T) {
-	s := &WasmScorer{category: fwksched.Affinity}
+	s := newTestScorer(t, "testdata/queue-scorer.wasm", fwksched.Affinity)
 	assert.Equal(t, fwksched.Affinity, s.Category())
 }

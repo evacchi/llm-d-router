@@ -10,6 +10,8 @@ kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
     delete deployment wasm-registry --ignore-not-found
 kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
     delete service wasm-registry --ignore-not-found
+kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    delete configmap wasm-filter-config --ignore-not-found
 
 info "Removing tier labels from pods..."
 pods=$(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \

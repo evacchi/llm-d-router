@@ -94,6 +94,31 @@ kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
 kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
     create configmap epp-config --from-file=epp-config.yaml="${EPP_CONFIG}"
 
+# ── Wasm filter config (watched via K8s API by the plugin) ───────────
+
+REGISTRY_CLUSTER_ADDR="${REGISTRY_SVC}.${NAMESPACE}.svc.cluster.local:5000"
+
+info "Creating wasm-filter-config ConfigMap..."
+kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    delete configmap wasm-filter-config --ignore-not-found
+kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    create configmap wasm-filter-config \
+    --from-literal=config.json="{\"module\": \"${REGISTRY_CLUSTER_ADDR}/demo-filter:standard\", \"plainHTTP\": true}"
+
+# ── Restart EPP to pick up new config ────────────────────────────────
+
+EPP_DEPLOY=$(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    get deployments -o name | grep endpoint-picker | head -1)
+if [[ -z "${EPP_DEPLOY}" ]]; then
+    error "Could not find EPP deployment"
+fi
+
+info "Restarting ${EPP_DEPLOY}..."
+kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    rollout restart "${EPP_DEPLOY}"
+kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    rollout status "${EPP_DEPLOY}" --timeout=120s
+
 # ── Port-forward ─────────────────────────────────────────────────────
 
 info "Port-forwarding registry to localhost:${REGISTRY_PORT}..."

@@ -31,6 +31,7 @@ helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
     --set kubeScheduler.enabled=false \
     --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
     --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
+    --set prometheus.prometheusSpec.scrapeInterval=5s \
     --set prometheus.prometheusSpec.resources.requests.memory=512Mi \
     --set prometheus.prometheusSpec.resources.limits.memory=1Gi \
     --set prometheus.service.type=NodePort \

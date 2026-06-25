@@ -70,11 +70,9 @@ fi
 # ── Label pods ───────────────────────────────────────────────────────
 
 info "Labeling model server pods..."
-pods=$(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
-    get pods -l app -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-
 i=0
-for pod in ${pods}; do
+while IFS= read -r pod; do
+    [[ -z "${pod}" ]] && continue
     if (( i % 2 == 0 )); then
         kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
             label pod "${pod}" tier=standard --overwrite
@@ -85,7 +83,8 @@ for pod in ${pods}; do
         info "  ${pod} -> tier=premium"
     fi
     ((i++))
-done
+done < <(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    get pods -l llm-d.ai/component=decode -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 
 # ── EPP config ───────────────────────────────────────────────────────
 

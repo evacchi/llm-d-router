@@ -105,6 +105,17 @@ kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
     create configmap wasm-filter-config \
     --from-literal=config.json="{\"module\": \"${REGISTRY_CLUSTER_ADDR}/demo-filter:standard\", \"plainHTTP\": true}"
 
+# ── Grant EPP permission to watch ConfigMaps ─────────────────────────
+
+EPP_ROLE=$(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \
+    get roles -o name | grep endpoint-picker | head -1)
+if [[ -n "${EPP_ROLE}" ]]; then
+    info "Patching ${EPP_ROLE} to allow ConfigMap watch..."
+    kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" patch "${EPP_ROLE}" \
+        --type=json -p '[{"op":"add","path":"/rules/-","value":{"apiGroups":[""],"resources":["configmaps"],"verbs":["get","list","watch"]}}]' \
+        2>/dev/null || true
+fi
+
 # ── Restart EPP to pick up new config ────────────────────────────────
 
 EPP_DEPLOY=$(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}" \

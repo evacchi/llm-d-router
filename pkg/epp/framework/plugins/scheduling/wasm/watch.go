@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -52,13 +53,26 @@ func watchConfigMap(ctx context.Context, ref configMapRef, onChange func(moduleC
 	}
 
 	logger.Info("watching ConfigMap for wasm plugin config", "namespace", ref.Namespace, "name", ref.Name, "key", ref.Key)
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		err := doWatch(ctx, clientset, ref, onChange, logger)
 		if err != nil && ctx.Err() == nil {
-			logger.Error(err, "ConfigMap watch ended, restarting")
+			logger.Error(err, "ConfigMap watch ended, restarting", "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		} else {
+			backoff = time.Second
 		}
 	}
 }

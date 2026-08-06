@@ -296,6 +296,35 @@ func TestValidateConfigFlagsMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestValidatePeerDiscoveryRequiresService(t *testing.T) {
+	newOpts := func() *Options {
+		opts := NewOptions()
+		opts.AddFlags(pflag.NewFlagSet("peer", pflag.ContinueOnError))
+		opts.PoolName = "peer-pool" // bypass the pool/selector validation
+		return opts
+	}
+
+	opts := newOpts()
+	opts.EnablePeerDiscovery = true
+	err := opts.Validate()
+	if err == nil {
+		t.Fatalf("Expected Validate() to fail when peer discovery is enabled without a service, but it succeeded")
+	}
+	for _, want := range []string{"enable-peer-discovery", "epp-peer-service"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Validate() error must reference the %q flag, got: %v", want, err)
+		}
+	}
+
+	// Providing the service name satisfies the requirement.
+	opts = newOpts()
+	opts.EnablePeerDiscovery = true
+	opts.PeerServiceName = "epp"
+	if err := opts.Validate(); err != nil {
+		t.Errorf("Validate() with peer service set: unexpected error %v", err)
+	}
+}
+
 func TestMetricsMTLSFlags(t *testing.T) {
 	fs := pflag.NewFlagSet("metrics-mtls", pflag.ContinueOnError)
 	opts := NewOptions()

@@ -360,6 +360,14 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 	startCrdReconcilers := opts.EndpointSelector == nil // If endpointSelector is nil, it means it's not in the standalone mode. Then we should start the inferencePool and other CRD Reconciler.
 	controllerCfg := runserver.NewControllerConfig(startCrdReconcilers)
 	controllerCfg.PopulateNonLeaderDatastore = r.featureGates[runserver.HAPopulateNonLeaderDatastoreFeatureGate]
+
+	// peerServiceName is empty unless peer discovery is enabled, which keeps the
+	// EndpointSlice cache and reconciler off by default.
+	peerServiceName := ""
+	if opts.EnablePeerDiscovery {
+		peerServiceName = opts.PeerServiceName
+	}
+	controllerCfg.PeerServiceName = peerServiceName
 	if err := controllerCfg.PopulateControllerConfig(cfg); err != nil {
 		setupLog.Error(err, "Failed to populate controller config")
 		return nil, nil, err
@@ -489,6 +497,10 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		GRPCMaxSendMsgSize:               opts.GRPCMaxSendMsgSize,
 		EnableGRPCStreamMetrics:          opts.EnableGRPCStreamMetrics,
 		EmitEndpointScores:               opts.EmitEndpointScores,
+		PeerDiscovery: runserver.PeerDiscovery{
+			ServiceName: peerServiceName,
+			SelfAddress: os.Getenv("POD_IP"),
+		},
 	}
 	if requestEvictor != nil {
 		serverRunner.EvictChannelLookup = requestEvictor.EvictionRegistry()

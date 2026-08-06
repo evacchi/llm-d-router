@@ -133,3 +133,29 @@ func TestReconcilerRunOnNonLeaders(t *testing.T) {
 		}
 	}
 }
+
+// TestPeerReconcilerRunsOnNonLeaders verifies the peer reconciler always runs on
+// every replica: unlike the datastore reconcilers it has no RunOnNonLeaders knob,
+// so the controller it registers must never need leader election.
+func TestPeerReconcilerRunsOnNonLeaders(t *testing.T) {
+	mgr := newCapturingManager(t)
+	r := &EPPPeerReconciler{
+		Reader:      mgr.GetClient(),
+		Notifier:    &recordingNotifier{},
+		ServiceName: testPeerSvc,
+		Namespace:   testPeerNS,
+	}
+	if err := r.SetupWithManager(mgr); err != nil {
+		t.Fatalf("SetupWithManager: %v", err)
+	}
+	if len(mgr.added) != 1 {
+		t.Fatalf("expected exactly 1 runnable registered, got %d", len(mgr.added))
+	}
+	ler, ok := mgr.added[0].(manager.LeaderElectionRunnable)
+	if !ok {
+		t.Fatalf("registered runnable is not a LeaderElectionRunnable")
+	}
+	if ler.NeedLeaderElection() {
+		t.Errorf("NeedLeaderElection() = true, want false (peer discovery runs on all replicas)")
+	}
+}

@@ -48,6 +48,10 @@ type ControllerConfig struct {
 	InferenceObjectiveGV       schema.GroupVersion
 	InferenceModelRewriteGV    schema.GroupVersion
 	PopulateNonLeaderDatastore bool
+	// PeerServiceName is the EPP's own Service. When set, the manager scopes an
+	// EndpointSlice informer to the pool namespace and that Service so peer
+	// discovery works with the namespaced Role.
+	PeerServiceName string
 }
 
 func NewControllerConfig(startCrdReconcilers bool) ControllerConfig {

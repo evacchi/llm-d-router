@@ -43,7 +43,7 @@ const testPeerService = "epp-peers"
 // them.
 func TestIntegrationEPPPeerDiscovery(t *testing.T) {
 	if testing.Short() {
-		t.Skip("Skipping integration test in short runMode")
+		t.Skip("Skipping integration test in short mode")
 	}
 
 	uid := uuid.New().String()[:8]

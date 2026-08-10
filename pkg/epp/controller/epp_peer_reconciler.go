@@ -123,8 +123,10 @@ func (r *EPPPeerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// endpointReady reports whether an endpoint is serving. A nil Ready condition is
-// treated as not ready.
+// endpointReady reports whether an endpoint is ready to receive traffic. The
+// Ready condition is false for terminating endpoints, so a replica leaves the
+// peer set as soon as it starts shutting down. A nil Ready is treated as not
+// ready.
 func endpointReady(ep *discoveryv1.Endpoint) bool {
 	return ep.Conditions.Ready != nil && *ep.Conditions.Ready
 }

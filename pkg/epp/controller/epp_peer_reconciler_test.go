@@ -70,8 +70,8 @@ func peerSlice(name string, port int32, eps ...discoveryv1.Endpoint) *discoveryv
 	}
 }
 
-func nn(ns, name string) types.NamespacedName {
-	return types.NamespacedName{Namespace: ns, Name: name}
+func nn(name string) types.NamespacedName {
+	return types.NamespacedName{Namespace: testPeerNS, Name: name}
 }
 
 func TestEPPPeerReconciler(t *testing.T) {
@@ -120,8 +120,8 @@ func TestEPPPeerReconciler(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	wantUpserts := []fwkdl.PeerMetadata{
-		{ID: nn(testPeerNS, "epp-1"), Address: "10.0.0.2", Port: "9010"},
-		{ID: nn(testPeerNS, "epp-2"), Address: "10.0.0.3", Port: "9010"},
+		{ID: nn("epp-1"), Address: "10.0.0.2", Port: "9010"},
+		{ID: nn("epp-2"), Address: "10.0.0.3", Port: "9010"},
 	}
 	if diff := cmp.Diff(wantUpserts, notifier.upserts, sortPeers); diff != "" {
 		t.Errorf("upserts mismatch (-want +got):\n%s", diff)
@@ -150,7 +150,7 @@ func TestEPPPeerReconciler(t *testing.T) {
 	if len(notifier.upserts) != 0 {
 		t.Errorf("unexpected upserts after delete: %v", notifier.upserts)
 	}
-	wantDeletes := []types.NamespacedName{nn(testPeerNS, "epp-2")}
+	wantDeletes := []types.NamespacedName{nn("epp-2")}
 	if diff := cmp.Diff(wantDeletes, notifier.deletes); diff != "" {
 		t.Errorf("deletes mismatch (-want +got):\n%s", diff)
 	}
@@ -181,7 +181,7 @@ func TestEPPPeerReconciler_FallbackID(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	want := []fwkdl.PeerMetadata{{ID: nn(testPeerNS, "10.0.0.5"), Address: "10.0.0.5", Port: "9010"}}
+	want := []fwkdl.PeerMetadata{{ID: nn("10.0.0.5"), Address: "10.0.0.5", Port: "9010"}}
 	if diff := cmp.Diff(want, notifier.upserts, sortPeers); diff != "" {
 		t.Errorf("upserts mismatch (-want +got):\n%s", diff)
 	}

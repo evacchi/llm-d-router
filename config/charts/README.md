@@ -128,6 +128,7 @@ Core settings for the Endpoint Picker Proxy (EPP) container and pod, including s
 | `router.extraServicePorts` | Extra ports to expose on the EPP Service. | `[]` |
 | `router.clusterDomain` | Kubernetes cluster DNS domain used to build in-cluster Service FQDNs. | `cluster.local` |
 | `router.epp.flags` | Map of command-line flags passed directly to the EPP binary. | `{}` |
+| `router.epp.peerDiscovery.enabled` | Grants the RBAC permission required by the `enable-peer-discovery` EPP flag (set under `router.epp.flags`). | `false` |
 | `router.epp.affinity` | Affinity rules for EPP pods. | `{}` |
 | `router.epp.tolerations` | Tolerations for EPP pods. | `[]` |
 | `router.epp.resources` | EPP container resource requests and limits. | `requests.cpu: "8"`, `requests.memory: 8Gi`, `limits.memory: 16Gi` |

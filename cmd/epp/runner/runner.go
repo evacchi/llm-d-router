@@ -67,6 +67,7 @@ import (
 	attrsession "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/session"
 	attrtopology "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/topology"
 	discoveryfile "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/discovery/file"
+	discoverypeerfile "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/discovery/peerfile"
 	extdcgm "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/dcgm"
 	extractormetrics "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/metrics"
 	extmodels "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/models"
@@ -147,6 +148,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/requestcontrol"
 	"github.com/llm-d/llm-d-router/pkg/epp/scheduling"
 	runserver "github.com/llm-d/llm-d-router/pkg/epp/server"
+	"github.com/llm-d/llm-d-router/pkg/epp/statesync"
 	"github.com/llm-d/llm-d-router/version"
 )
 
@@ -253,6 +255,10 @@ func (r *Runner) Run(ctx context.Context) error {
 	rawConfig, err := r.parseConfigurationPhaseOne(ctx, opts)
 	if err != nil {
 		setupLog.Error(err, "Failed to parse configuration")
+		return err
+	}
+	if err := validatePeerDiscoverySelection(opts, rawConfig); err != nil {
+		setupLog.Error(err, "Invalid peer discovery configuration")
 		return err
 	}
 	if rawConfig.DataLayer != nil && rawConfig.DataLayer.Discovery != nil {
@@ -724,6 +730,8 @@ func (r *Runner) registerInTreePlugins() {
 	fwkplugin.Register(discoveryfile.PluginType, fwkplugin.StabilityBeta, discoveryfile.Factory)
 	// multicluster variant
 	fwkplugin.Register(discoveryfile.MultiClusterPluginType, fwkplugin.StabilityAlpha, discoveryfile.MultiClusterFactory)
+	// file-based peer discovery for cross-replica state synchronization
+	fwkplugin.Register(discoverypeerfile.PluginType, fwkplugin.StabilityAlpha, discoverypeerfile.Factory)
 
 	// register request header processor plugins
 	// Alpha
@@ -945,6 +953,49 @@ func (r *Runner) resolveDiscovery(rawConfig *configapi.EndpointPickerConfig) (fw
 	return disc, nil
 }
 
+// validatePeerDiscoverySelection enforces that the two peer-discovery mechanisms
+// are mutually exclusive and that the file-based plugin is only selected on the
+// non-Kubernetes path. The EndpointSlice reconciler (--enable-peer-discovery)
+// requires a controller manager and runs on the K8s path; the file-based plugin
+// runs on the file-discovery path. Both feed the same PeerNotifier.
+func validatePeerDiscoverySelection(opts *runserver.Options, rawConfig *configapi.EndpointPickerConfig) error {
+	peerPluginConfigured := rawConfig.DataLayer != nil && rawConfig.DataLayer.PeerDiscovery != nil
+	if !peerPluginConfigured {
+		return nil
+	}
+	if opts.EnablePeerDiscovery {
+		return errors.New("dataLayer.peerDiscovery and --enable-peer-discovery are mutually exclusive: " +
+			"the file-based plugin and the EndpointSlice reconciler both feed peer discovery, select one")
+	}
+	// File-based peer discovery has no controller manager to run in, so it is only
+	// wired on the file-discovery path, which requires dataLayer.discovery.
+	if rawConfig.DataLayer.Discovery == nil {
+		return errors.New("dataLayer.peerDiscovery requires dataLayer.discovery: " +
+			"file-based peer discovery runs only in file-discovery (non-Kubernetes) mode")
+	}
+	return nil
+}
+
+// resolvePeerDiscovery returns the peer-discovery plugin identified by
+// rawConfig.DataLayer.PeerDiscovery.PluginRef, or nil when none is configured.
+// As with resolveDiscovery, the plugin is expected to have already been
+// instantiated and registered in r.PluginHandle by parseConfigurationPhaseTwo.
+func (r *Runner) resolvePeerDiscovery(rawConfig *configapi.EndpointPickerConfig) (fwkdl.PeerDiscovery, error) {
+	if rawConfig.DataLayer == nil || rawConfig.DataLayer.PeerDiscovery == nil {
+		return nil, nil
+	}
+	ref := rawConfig.DataLayer.PeerDiscovery.PluginRef
+	p := r.PluginHandle.Plugin(ref)
+	if p == nil {
+		return nil, fmt.Errorf("peer-discovery: no plugin found with name %q", ref)
+	}
+	disc, ok := p.(fwkdl.PeerDiscovery)
+	if !ok {
+		return nil, fmt.Errorf("peer-discovery: plugin %q does not implement PeerDiscovery", ref)
+	}
+	return disc, nil
+}
+
 // initAdmissionControl builds the request admission controller, gated by the
 // FlowControl feature gate. With FC on it constructs the FlowRegistry and
 // FlowController and wraps endpointCandidates in a short-lived cache; with FC
@@ -1034,6 +1085,12 @@ func (r *Runner) runWithFileDiscovery(ctx context.Context, opts *runserver.Optio
 		return err
 	}
 
+	peerDisc, err := r.resolvePeerDiscovery(rawConfig)
+	if err != nil {
+		setupLog.Error(err, "Failed to resolve peer discovery plugin")
+		return err
+	}
+
 	if err := fwkplugin.ValidatePluginStability(r.PluginHandle, opts.AllowExperimentalPlugins); err != nil {
 		setupLog.Error(err, "Plugin stability validation failed")
 		return err
@@ -1118,6 +1175,16 @@ func (r *Runner) runWithFileDiscovery(ctx context.Context, opts *runserver.Optio
 	g.Add("discovery", func(ctx context.Context) error {
 		return disc.Start(ctx, fwkdl.NewDiscoveryNotifier(ds))
 	})
+	// Peer discovery, when configured, populates an in-memory peer store for a
+	// future cross-replica syncer. It runs alongside endpoint discovery and does
+	// not gate request serving, since nothing consumes the peer set yet.
+	if peerDisc != nil {
+		peerStore := statesync.NewMemoryPeerStore()
+		setupLog.Info("file-discovery mode: peer discovery enabled", "peerDiscoveryPlugin", peerDisc.TypedName())
+		g.Add("peer-discovery", func(ctx context.Context) error {
+			return peerDisc.Start(ctx, fwkdl.NewPeerNotifier(peerStore))
+		})
+	}
 	// epp-server and health wait for the discovery plugin's initial sync before
 	// going live, so requests and probes never observe an empty datastore. See
 	// EndpointDiscovery.Ready contract.

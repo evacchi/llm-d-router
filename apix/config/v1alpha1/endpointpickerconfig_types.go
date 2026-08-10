@@ -241,6 +241,13 @@ type DataLayerConfig struct {
 	// If omitted, the EPP uses the default Kubernetes-based discovery.
 	Discovery *DiscoveryConfig `json:"discovery,omitempty"`
 	// +optional
+	// PeerDiscovery specifies which PeerDiscovery plugin to use for populating the
+	// set of peer EPP replicas for cross-replica state synchronization. It is the
+	// Kubernetes-independent alternative to the --enable-peer-discovery flag's
+	// EndpointSlice reconciler; the two are mutually exclusive. If omitted, no
+	// file-based peer discovery runs.
+	PeerDiscovery *PeerDiscoveryConfig `json:"peerDiscovery,omitempty"`
+	// +optional
 	// CrossReplicaSyncerPluginRef names the plugin instance to use as the cross-EPP
 	// cross-replica syncer. The reference is to the name of an entry in the
 	// top-level Plugins section. If omitted, no cross-replica syncer is used
@@ -257,8 +264,8 @@ func (dlc *DataLayerConfig) String() string {
 	if dlc == nil {
 		return nilString
 	}
-	return fmt.Sprintf("{Sources: %v, Discovery: %v, CrossReplicaSyncerPluginRef: %s, CrossReplicaSyncInterval: %v}",
-		dlc.Sources, dlc.Discovery, dlc.CrossReplicaSyncerPluginRef, dlc.CrossReplicaSyncInterval)
+	return fmt.Sprintf("{Sources: %v, Discovery: %v, PeerDiscovery: %v, CrossReplicaSyncerPluginRef: %s, CrossReplicaSyncInterval: %v}",
+		dlc.Sources, dlc.Discovery, dlc.PeerDiscovery, dlc.CrossReplicaSyncerPluginRef, dlc.CrossReplicaSyncInterval)
 }
 
 // DiscoveryConfig references the EndpointDiscovery plugin to use.
@@ -275,6 +282,23 @@ func (dc *DiscoveryConfig) String() string {
 		return nilString
 	}
 	return fmt.Sprintf("{PluginRef: %s}", dc.PluginRef)
+}
+
+// PeerDiscoveryConfig references the PeerDiscovery plugin to use for discovering
+// peer EPP replicas.
+type PeerDiscoveryConfig struct {
+	// +required
+	// +kubebuilder:validation:Required
+	// PluginRef is the name of the plugin instance (from the Plugins list) that
+	// implements PeerDiscovery.
+	PluginRef string `json:"pluginRef"`
+}
+
+func (pdc *PeerDiscoveryConfig) String() string {
+	if pdc == nil {
+		return nilString
+	}
+	return fmt.Sprintf("{PluginRef: %s}", pdc.PluginRef)
 }
 
 // DataLayerSource contains the configuration of a DataSource of the DataLayer feature

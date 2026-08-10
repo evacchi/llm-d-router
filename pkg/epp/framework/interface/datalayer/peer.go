@@ -20,6 +20,8 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/types"
+
+	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 )
 
 // PeerMetadata identifies a peer EPP replica participating in cross-replica
@@ -71,4 +73,28 @@ type PeerNotifier interface {
 	Upsert(peer *PeerMetadata)
 	// Delete removes a peer by its identity.
 	Delete(id types.NamespacedName)
+}
+
+// PeerDiscovery discovers peer EPP replicas and drives their lifecycle through a
+// PeerNotifier. It mirrors EndpointDiscovery: implementations are registered in
+// the plugin registry and selected via
+// EndpointPickerConfig.dataLayer.peerDiscovery.pluginRef. It is the
+// Kubernetes-independent counterpart to the EndpointSlice-based EPPPeerReconciler.
+type PeerDiscovery interface {
+	fwkplugin.Plugin
+
+	// Start begins discovery and blocks in the caller's goroutine until ctx is
+	// cancelled or a fatal error occurs. It is the caller's responsibility to
+	// invoke Start in a dedicated goroutine.
+	//
+	// Implementations SHOULD enumerate all currently known peers via
+	// notifier.Upsert before entering the watch loop, to avoid a consumer
+	// observing an empty peer set at startup.
+	Start(ctx context.Context, notifier PeerNotifier) error
+
+	// Ready returns a channel that is closed once after the plugin has completed
+	// its initial reconciliation with the underlying source. Its contract
+	// matches EndpointDiscovery.Ready: closed at most once per Start, only after
+	// a successful initial sync, and zero peers is a valid outcome.
+	Ready() <-chan struct{}
 }

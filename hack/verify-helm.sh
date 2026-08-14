@@ -208,24 +208,6 @@ if ! grep -q -- '--secure-serving=false' "${flag_render_output}"; then
   exit 1
 fi
 
-echo "Verifying router.epp.peerDiscovery.enabled gates the EndpointSlices RBAC permission..."
-peer_discovery_disabled_output="${TEMP_DIR}/llm-d-router-standalone-peer-discovery-disabled.yaml"
-peer_discovery_disabled_command="${HELM} template ${SCRIPT_ROOT}/config/charts/llm-d-router-standalone --set router.modelServers.matchLabels.app=llm-instance-gateway --set router.inferencePool.create=false > ${peer_discovery_disabled_output}"
-echo "Executing: ${peer_discovery_disabled_command}"
-eval "${peer_discovery_disabled_command}"
-if grep -q -- 'endpointslices' "${peer_discovery_disabled_output}"; then
-  echo "Helm template rendered the EndpointSlices RBAC permission with router.epp.peerDiscovery.enabled unset"
-  exit 1
-fi
-peer_discovery_enabled_output="${TEMP_DIR}/llm-d-router-standalone-peer-discovery-enabled.yaml"
-peer_discovery_enabled_command="${HELM} template ${SCRIPT_ROOT}/config/charts/llm-d-router-standalone --set router.modelServers.matchLabels.app=llm-instance-gateway --set router.inferencePool.create=false --set router.epp.peerDiscovery.enabled=true > ${peer_discovery_enabled_output}"
-echo "Executing: ${peer_discovery_enabled_command}"
-eval "${peer_discovery_enabled_command}"
-if ! grep -q -- 'endpointslices' "${peer_discovery_enabled_output}"; then
-  echo "Helm template did not render the EndpointSlices RBAC permission with router.epp.peerDiscovery.enabled=true"
-  exit 1
-fi
-
 echo "Verifying llm-d-router-standalone agentgateway renders plaintext EPP and custom listener ports..."
 agentgateway_render_output="${TEMP_DIR}/llm-d-router-standalone-agentgateway-render.yaml"
 agentgateway_render_command="${HELM} template ${SCRIPT_ROOT}/config/charts/llm-d-router-standalone --set router.proxy.proxyType=agentgateway --set router.modelServers.matchLabels.app=llm-instance-gateway --set router.inferencePool.create=false --set 'router.modelServers.targetPorts[0].number=8000' --set 'router.extraServicePorts[0].name=http' --set 'router.extraServicePorts[0].port=9000' --set 'router.extraServicePorts[0].protocol=TCP' --set 'router.extraServicePorts[0].targetPort=http' > ${agentgateway_render_output}"

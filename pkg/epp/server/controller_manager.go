@@ -20,10 +20,8 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -97,14 +95,6 @@ func defaultManagerOptions(cfg ControllerConfig, gknn common.GKNN, metricsServer
 		opt.Cache.ByObject[&v1.InferencePool{}] = cache.ByObject{
 			Namespaces: map[string]cache.Config{gknn.Namespace: {FieldSelector: fields.SelectorFromSet(fields.Set{
 				"metadata.name": gknn.Name,
-			})}},
-		}
-	}
-	// Peer discovery is implicitly disabled if PeerServiceName is empty.
-	if cfg.PeerServiceName != "" {
-		opt.Cache.ByObject[&discoveryv1.EndpointSlice{}] = cache.ByObject{
-			Namespaces: map[string]cache.Config{gknn.Namespace: {LabelSelector: labels.SelectorFromSet(labels.Set{
-				discoveryv1.LabelServiceName: cfg.PeerServiceName,
 			})}},
 		}
 	}

@@ -69,7 +69,6 @@ import (
 	attrsession "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/session"
 	attrtopology "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/topology"
 	discoveryfile "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/discovery/file"
-	k8speer "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/discovery/k8speer"
 	extdcgm "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/dcgm"
 	extractormetrics "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/metrics"
 	extmodels "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/models"
@@ -361,7 +360,6 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 	startCrdReconcilers := opts.EndpointSelector == nil // If endpointSelector is nil, it means it's not in the standalone mode. Then we should start the inferencePool and other CRD Reconciler.
 	controllerCfg := runserver.NewControllerConfig(startCrdReconcilers)
 	controllerCfg.PopulateNonLeaderDatastore = r.featureGates[runserver.HAPopulateNonLeaderDatastoreFeatureGate]
-
 	if err := controllerCfg.PopulateControllerConfig(cfg); err != nil {
 		setupLog.Error(err, "Failed to populate controller config")
 		return nil, nil, err
@@ -379,18 +377,6 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		return nil, nil, err
 	}
 	setupLog.Info("EPP config after phase two", "config", eppConfig)
-
-	// Resolve peer discovery plugin from config (if configured) and scope the
-	// EndpointSlice cache to its Service so the namespaced Role is sufficient.
-	var peerDiscPlugin *k8speer.Plugin
-	if rawConfig.DataLayer != nil && rawConfig.DataLayer.PeerDiscovery != nil {
-		peerDiscPlugin, err = r.resolvePeerDiscovery(rawConfig)
-		if err != nil {
-			setupLog.Error(err, "Failed to resolve peer discovery plugin")
-			return nil, nil, err
-		}
-		controllerCfg.PeerServiceName = peerDiscPlugin.ServiceName()
-	}
 
 	// --- Setup Metrics Server ---
 	r.customCollectors = append(r.customCollectors, collectors.NewInferencePoolMetricsCollector(ds))
@@ -511,13 +497,6 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 	if err := serverRunner.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to setup EPP controllers")
 		return nil, nil, err
-	}
-
-	if peerDiscPlugin != nil {
-		if err := peerDiscPlugin.SetupWithManager(mgr, gknn.Namespace); err != nil {
-			setupLog.Error(err, "Failed to setup peer discovery")
-			return nil, nil, err
-		}
 	}
 
 	// --- Add Runnables to Manager ---
@@ -741,8 +720,6 @@ func (r *Runner) registerInTreePlugins() {
 	fwkplugin.Register(discoveryfile.PluginType, fwkplugin.StabilityBeta, discoveryfile.Factory)
 	// multicluster variant
 	fwkplugin.Register(discoveryfile.MultiClusterPluginType, fwkplugin.StabilityAlpha, discoveryfile.MultiClusterFactory)
-	// Alpha
-	fwkplugin.Register(k8speer.PluginType, fwkplugin.StabilityAlpha, k8speer.Factory)
 
 	// register request header processor plugins
 	// Alpha
@@ -960,22 +937,6 @@ func (r *Runner) resolveDiscovery(rawConfig *configapi.EndpointPickerConfig) (fw
 	disc, ok := p.(fwkdl.EndpointDiscovery)
 	if !ok {
 		return nil, fmt.Errorf("discovery: plugin %q does not implement EndpointDiscovery", ref)
-	}
-	return disc, nil
-}
-
-// resolvePeerDiscovery returns the peer discovery plugin identified by
-// rawConfig.DataLayer.PeerDiscovery.PluginRef. The plugin must have been
-// instantiated and registered in r.PluginHandle by parseConfigurationPhaseTwo.
-func (r *Runner) resolvePeerDiscovery(rawConfig *configapi.EndpointPickerConfig) (*k8speer.Plugin, error) {
-	ref := rawConfig.DataLayer.PeerDiscovery.PluginRef
-	p := r.PluginHandle.Plugin(ref)
-	if p == nil {
-		return nil, fmt.Errorf("peerDiscovery: no plugin found with name %q", ref)
-	}
-	disc, ok := p.(*k8speer.Plugin)
-	if !ok {
-		return nil, fmt.Errorf("peerDiscovery: plugin %q does not implement PeerDiscovery", ref)
 	}
 	return disc, nil
 }

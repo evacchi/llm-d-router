@@ -14,12 +14,6 @@ epp:
   # gRPC port serving EPP liveness and readiness checks, 9003 if unset.
   # grpcHealthPort: 9003
 
-  # Enables the get/list/watch EndpointSlices RBAC permission required by the
-  # --enable-peer-discovery flag. Set alongside router.epp.flags to enable
-  # peer discovery; has no effect on its own.
-  peerDiscovery:
-    enabled: false
-
   parsers: [] # e.g. ["openai-parser", "anthropic-parser"], or empty for auto-selection
 
   # Metrics DataSource Configuration

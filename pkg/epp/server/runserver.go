@@ -161,7 +161,6 @@ func (r *ExtProcServerRunner) SetupWithManager(mgr ctrl.Manager) error {
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("failed setting up PodReconciler - %w", err)
 	}
-
 	return nil
 }
 

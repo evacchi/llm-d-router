@@ -38,6 +38,10 @@ type PeerMetadata struct {
 
 // PeerStore is the narrow interface required by NewPeerNotifier. Any store that
 // implements PeerUpsert and PeerDelete satisfies it.
+//
+// PeerStore is intentionally separate from Datastore even if they have a similar
+// shape: endpoints and peers have different consumers (scheduler vs. cross-replica syncer)
+// and different lifecycles (bound to the InferencePool vs. the EPP deployment).
 type PeerStore interface {
 	PeerUpsert(ctx context.Context, meta *PeerMetadata)
 	PeerDelete(id types.NamespacedName)

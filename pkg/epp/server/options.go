@@ -78,11 +78,6 @@ type Options struct {
 	PoolNamespace string // Namespace of the InferencePool this Endpoint Picker is associated with.
 	PoolName      string // Name of the InferencePool this Endpoint Picker is associated with.
 	//
-	// Peer discovery (active-active state synchronization).
-	//
-	EnablePeerDiscovery bool   // Enables discovery of peer EPP replicas. Requires PeerServiceName.
-	PeerServiceName     string // EPP's own Service whose EndpointSlices enumerate peer replicas.
-	//
 	// Endpoints (in lieu of using an InferencePool for service discovery).
 	//
 	EndpointSelector            labels.Selector // Parsed selector to filter model server pods on. Set via --endpoint-selector flag and parsed in Complete().
@@ -180,11 +175,6 @@ func (opts *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&opts.PoolNamespace, "pool-namespace", opts.PoolNamespace,
 		"Namespace of the InferencePool this Endpoint Picker is associated with.")
 	fs.StringVar(&opts.PoolName, "pool-name", opts.PoolName, "Name of the InferencePool this Endpoint Picker is associated with.")
-	fs.BoolVar(&opts.EnablePeerDiscovery, "enable-peer-discovery", opts.EnablePeerDiscovery,
-		"Enables discovery of peer EPP replicas for cross-replica state synchronization. Requires --epp-peer-service.")
-	fs.StringVar(&opts.PeerServiceName, "epp-peer-service", opts.PeerServiceName,
-		"Name of the EPP's own Service. The EPP watches that Service's EndpointSlices to discover peer replicas. "+
-			"Only used when --enable-peer-discovery is set.")
 	fs.StringVar(&opts.endpointSelectorStr, "endpoint-selector", opts.endpointSelectorStr,
 		"Selector to filter model server pods on. "+
 			"Supports Kubernetes label selector syntax: equality-based (e.g., 'app=vllm,env=prod'), "+
@@ -386,10 +376,6 @@ func (opts *Options) Validate() error {
 
 	if opts.ConfigText != "" && opts.ConfigFile != "" {
 		return fmt.Errorf("both the %q and %q flags cannot be set at the same time", "config-file", "config-text")
-	}
-
-	if opts.EnablePeerDiscovery && opts.PeerServiceName == "" {
-		return fmt.Errorf("%q requires %q to be set", "enable-peer-discovery", "epp-peer-service")
 	}
 
 	if opts.MetricsClientCAFile != "" && opts.MetricsCertDir == "" {

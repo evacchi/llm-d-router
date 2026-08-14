@@ -48,10 +48,14 @@ type EPPPeerReconciler struct {
 	// SelfAddress is this replica's endpoint address, excluded from the peer
 	// set. Empty includes all endpoints.
 	SelfAddress string
+	// OnFirstReconcile, if set, is called once after the first successful
+	// reconciliation. Used by the plugin to signal readiness.
+	OnFirstReconcile func()
 
 	// prev is the last reported peer set, used to compute deletes. Access is
 	// serialized by the controller (single concurrent reconcile).
-	prev map[types.NamespacedName]fwkdl.PeerMetadata
+	prev           map[types.NamespacedName]fwkdl.PeerMetadata
+	firstReconcile bool
 }
 
 func (r *EPPPeerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
@@ -81,6 +85,13 @@ func (r *EPPPeerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl
 		}
 	}
 	r.prev = desired
+
+	if !r.firstReconcile {
+		r.firstReconcile = true
+		if r.OnFirstReconcile != nil {
+			r.OnFirstReconcile()
+		}
+	}
 
 	logger.V(logutil.DEBUG).Info("Reconciled EPP peers", "service", r.ServiceName, "peers", len(desired))
 	return ctrl.Result{}, nil

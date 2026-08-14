@@ -42,12 +42,10 @@ import (
 	datalayerlogger "github.com/llm-d/llm-d-router/pkg/epp/datalayer/logger"
 	"github.com/llm-d/llm-d-router/pkg/epp/datastore"
 	"github.com/llm-d/llm-d-router/pkg/epp/flowcontrol/contracts"
-	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkfc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/flowcontrol"
 	"github.com/llm-d/llm-d-router/pkg/epp/handlers"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 	"github.com/llm-d/llm-d-router/pkg/epp/requestcontrol"
-	"github.com/llm-d/llm-d-router/pkg/epp/statesync"
 )
 
 // ExtProcServerRunner provides methods to manage an external process server.
@@ -81,17 +79,6 @@ type ExtProcServerRunner struct {
 	// EvictChannelLookup, when set, enables the ext_proc server to terminate in-flight requests
 	// selected for eviction by flow control. See docs/flow-control-eviction.md.
 	EvictChannelLookup handlers.EvictChannelLookup
-	PeerDiscovery      PeerDiscovery
-}
-
-// PeerDiscovery configures discovery of peer EPP replicas over the EPP Service's
-// EndpointSlices. A zero ServiceName disables it.
-type PeerDiscovery struct {
-	ServiceName string // EPP's own Service whose EndpointSlices enumerate peers.
-	SelfAddress string // this replica's endpoint address, excluded from the peer set.
-	// Store holds the live peer set once SetupWithManager registers the
-	// reconciler. It is the handoff point for a cross-replica syncer.
-	Store *statesync.MemoryPeerStore
 }
 
 // NewDefaultExtProcServerRunner creates a runner with default values.
@@ -175,19 +162,6 @@ func (r *ExtProcServerRunner) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed setting up PodReconciler - %w", err)
 	}
 
-	// Peer discovery is implicitly disabled if PeerDiscovery.ServiceName is empty.
-	if r.PeerDiscovery.ServiceName != "" {
-		r.PeerDiscovery.Store = statesync.NewMemoryPeerStore()
-		if err := (&controller.EPPPeerReconciler{
-			Reader:      mgr.GetClient(),
-			Notifier:    fwkdl.NewPeerNotifier(r.PeerDiscovery.Store),
-			ServiceName: r.PeerDiscovery.ServiceName,
-			Namespace:   r.GKNN.Namespace,
-			SelfAddress: r.PeerDiscovery.SelfAddress,
-		}).SetupWithManager(mgr); err != nil {
-			return fmt.Errorf("failed setting up EPPPeerReconciler - %w", err)
-		}
-	}
 	return nil
 }
 

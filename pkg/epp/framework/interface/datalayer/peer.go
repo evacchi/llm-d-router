@@ -20,6 +20,8 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/types"
+
+	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 )
 
 // PeerMetadata identifies a peer EPP replica participating in cross-replica
@@ -56,6 +58,22 @@ func (n *peerNotifier) Upsert(peer *PeerMetadata) {
 
 func (n *peerNotifier) Delete(id types.NamespacedName) {
 	n.store.PeerDelete(id)
+}
+
+// PeerDiscovery discovers peer EPP replicas and drives their lifecycle through
+// a PeerNotifier. Implementations are registered in the plugin registry and
+// selected via EndpointPickerConfig.dataLayer.peerDiscovery.pluginRef.
+type PeerDiscovery interface {
+	fwkplugin.Plugin
+
+	// Start begins discovery and blocks until ctx is cancelled or a fatal
+	// error occurs. The caller invokes Start in a dedicated goroutine.
+	Start(ctx context.Context, notifier PeerNotifier) error
+
+	// Ready returns a channel that is closed once after the plugin has
+	// completed its initial reconciliation with the underlying source.
+	// Callers use it to gate components that depend on a populated peer set.
+	Ready() <-chan struct{}
 }
 
 // PeerNotifier is the callback through which peer discovery communicates the set

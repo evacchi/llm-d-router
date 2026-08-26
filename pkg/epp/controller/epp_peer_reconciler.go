@@ -71,7 +71,7 @@ func (r *EPPPeerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl
 		client.InNamespace(r.Namespace),
 		client.MatchingLabelsSelector{Selector: r.Selector},
 	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing peer pods in %s - %w", r.Namespace, err)
+		return ctrl.Result{}, fmt.Errorf("listing peer pods in %s: %w", r.Namespace, err)
 	}
 
 	desired := r.desiredPeers(pods.Items)

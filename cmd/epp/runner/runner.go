@@ -518,12 +518,10 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		return nil, nil, err
 	}
 
-	if peerDiscPlugin != nil {
-		if m, ok := peerDiscPlugin.(fwkplugin.ManagerSetup); ok {
-			if err := m.SetupWithManager(mgr); err != nil {
-				setupLog.Error(err, "Failed to setup peer discovery")
-				return nil, nil, err
-			}
+	if kp, ok := peerDiscPlugin.(*k8speer.Plugin); ok {
+		if err := kp.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to setup peer discovery")
+			return nil, nil, err
 		}
 	}
 

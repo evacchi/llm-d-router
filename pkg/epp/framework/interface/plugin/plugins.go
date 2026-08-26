@@ -18,8 +18,6 @@ package plugin
 
 import (
 	"encoding/json"
-
-	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // Plugin defines the interface for a plugin.
@@ -27,12 +25,6 @@ import (
 type Plugin interface {
 	// TypedName returns the type and name tuple of this plugin instance.
 	TypedName() TypedName
-}
-
-// ManagerSetup is an optional interface for plugins that register
-// controllers with the manager before it starts.
-type ManagerSetup interface {
-	SetupWithManager(mgr ctrl.Manager) error
 }
 
 // ReadinessChecker is an optional interface for plugins whose asynchronous

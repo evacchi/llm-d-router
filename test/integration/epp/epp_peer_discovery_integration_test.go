@@ -58,9 +58,9 @@ func createPodWithStatus(ctx context.Context, t *testing.T, c client.Client, pod
 }
 
 // TestIntegrationEPPPeerDiscovery runs EPPPeerReconciler against a live API
-// server, with the notifier bound before the manager starts. It covers:
+// server, with the notifier set at construction. It covers:
 //
-//   - a new peer becomes available
+//   - a ready pod matching the selector becomes a peer
 //   - this replica's own pod is excluded by IP
 //   - a peer that goes unready is removed
 //   - a deleted peer is removed
@@ -83,12 +83,12 @@ func TestIntegrationEPPPeerDiscovery(t *testing.T) {
 
 	r := &controller.EPPPeerReconciler{
 		Reader:      mgr.GetClient(),
+		Notifier:    fwkdl.NewPeerNotifier(store),
 		Selector:    selector,
 		Namespace:   nsName,
 		Port:        "9002",
 		SelfAddress: "10.0.0.1",
 	}
-	require.NoError(t, r.BindNotifier(fwkdl.NewPeerNotifier(store)))
 	require.NoError(t, r.SetupWithManager(mgr))
 
 	startManagerAndWaitForSync(ctx, t, mgr)
@@ -133,13 +133,12 @@ func TestIntegrationEPPPeerDiscovery(t *testing.T) {
 	}, eventWaitTimeout, eventPollInterval, "expected 0 peers after deleting epp-2")
 }
 
-// TestIntegrationPeerPlugin runs the k8s-peer-discovery plugin against a live
-// API server. Start binds the notifier after the manager is already
-// reconciling, so it covers:
+// TestIntegrationPeerPlugin runs the k8s-peer-discovery plugin end to end
+// against a live API server. SetupWithManager registers both the reconciler
+// and a Start runnable, so the manager drives the full lifecycle:
 //
-//   - peers found before Start are buffered, not emitted
-//   - the buffer is replayed once the notifier is bound
-//   - later pod changes reach the store
+//   - peers flow directly into the store from the first reconcile
+//   - a peer that is deleted is removed from the store
 func TestIntegrationPeerPlugin(t *testing.T) {
 	const (
 		selfIP  = "10.0.0.1"
@@ -173,7 +172,8 @@ func TestIntegrationPeerPlugin(t *testing.T) {
 
 	startManagerAndWaitForSync(ctx, t, mgr)
 
-	// Discover a peer while no notifier is bound.
+	// Create pods. The manager-registered Start runnable binds the buffer to
+	// the store, so peers flow through to Store() once the manager is up.
 	createPodWithStatus(ctx, t, mgrClient, readyPeerPod("epp-0", nsName, selfIP))
 	createPodWithStatus(ctx, t, mgrClient, readyPeerPod("epp-1", nsName, peer1IP))
 
@@ -182,18 +182,13 @@ func TestIntegrationPeerPlugin(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("plugin did not become ready")
 	}
-	require.Empty(t, peerDisc.Store().Peers(), "peers must be buffered, not emitted, before Start")
-
-	// Start binds the notifier, which drains the buffer into the store.
-	startErr := make(chan error, 1)
-	go func() { startErr <- peerDisc.Start(ctx, fwkdl.NewPeerNotifier(peerDisc.Store())) }()
 
 	require.Eventually(t, func() bool {
 		peers := peerDisc.Store().Peers()
 		return len(peers) == 1 && peers[0].Address == peer1IP
-	}, eventWaitTimeout, eventPollInterval, "expected the buffered peer to be replayed")
+	}, eventWaitTimeout, eventPollInterval, "expected 1 peer")
 
-	// Discovery keeps flowing to the store once the notifier is bound.
+	// Discovery keeps flowing.
 	peer2 := readyPeerPod("epp-2", nsName, peer2IP)
 	createPodWithStatus(ctx, t, mgrClient, peer2)
 
@@ -207,10 +202,4 @@ func TestIntegrationPeerPlugin(t *testing.T) {
 		peers := peerDisc.Store().Peers()
 		return len(peers) == 1 && peers[0].Address == peer1IP
 	}, eventWaitTimeout, eventPollInterval, "expected epp-2 to be removed")
-
-	select {
-	case err := <-startErr:
-		t.Fatalf("Start returned early: %v", err)
-	default:
-	}
 }

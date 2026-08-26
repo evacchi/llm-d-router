@@ -28,6 +28,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/labels"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/llm-d/llm-d-router/pkg/epp/controller"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
@@ -50,19 +51,10 @@ type params struct {
 // Plugin implements PeerDiscovery by watching Pods via a controller-runtime
 // reconciler registered with the caller's manager.
 //
-// Lifecycle has two phases:
-//
-//  1. SetupWithManager — registers the reconciler. Peers are discovered and
-//     buffered in the reconciler's prev map, but no events are emitted.
-//  2. Start — binds a PeerNotifier, replays the buffer, and forwards events
-//     from that point on. The caller (typically the runner) passes the notifier
-//     so it controls which store receives peers.
-//
-// The runner wires Start as a manager runnable:
-//
-//	g.Add("peer-discovery", func(ctx context.Context) error {
-//	    return peerDisc.Start(ctx, fwkdl.NewPeerNotifier(peerDisc.Store()))
-//	})
+// SetupWithManager wires the reconciler to emit directly into the plugin's
+// MemoryPeerStore and registers a Start runnable with the manager. Peers are
+// available in Store() from the first reconcile; no buffering or late binding
+// is needed because the store is goroutine-safe and owned by the plugin.
 type Plugin struct {
 	typedName   fwkplugin.TypedName
 	selector    labels.Selector
@@ -70,7 +62,7 @@ type Plugin struct {
 	namespace   string
 	selfAddress string
 	store       *statesync.MemoryPeerStore
-	reconciler  *controller.EPPPeerReconciler
+	notifier    fwkdl.PeerNotifier
 
 	ready     chan struct{}
 	readyOnce sync.Once
@@ -104,13 +96,15 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 	if name == "" {
 		name = PluginType
 	}
+	store := statesync.NewMemoryPeerStore()
 	return &Plugin{
 		typedName:   fwkplugin.TypedName{Type: PluginType, Name: name},
 		selector:    selector,
 		port:        p.Port,
 		namespace:   p.Namespace,
 		selfAddress: os.Getenv("POD_IP"),
-		store:       statesync.NewMemoryPeerStore(),
+		store:       store,
+		notifier:    fwkdl.NewPeerNotifier(store),
 		ready:       make(chan struct{}),
 	}, nil
 }
@@ -121,12 +115,13 @@ func (p *Plugin) TypedName() fwkplugin.TypedName { return p.typedName }
 // which replicas to sync with.
 func (p *Plugin) Store() *statesync.MemoryPeerStore { return p.store }
 
-// SetupWithManager registers the EPPPeerReconciler with the given manager.
-// Must be called before the manager starts. The reconciler's notifier is
-// bound later by Start via BindNotifier.
+// SetupWithManager registers the EPPPeerReconciler and a Start runnable with
+// the given manager. The reconciler emits directly into the plugin's store via
+// its notifier.
 func (p *Plugin) SetupWithManager(mgr ctrl.Manager) error {
-	p.reconciler = &controller.EPPPeerReconciler{
+	reconciler := &controller.EPPPeerReconciler{
 		Reader:      mgr.GetClient(),
+		Notifier:    p.notifier,
 		Selector:    p.selector,
 		Namespace:   p.namespace,
 		Port:        p.port,
@@ -135,21 +130,19 @@ func (p *Plugin) SetupWithManager(mgr ctrl.Manager) error {
 			p.readyOnce.Do(func() { close(p.ready) })
 		},
 	}
-	return p.reconciler.SetupWithManager(mgr)
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return err
+	}
+	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		return p.Start(ctx, nil)
+	}))
 }
 
 func (p *Plugin) Ready() <-chan struct{} { return p.ready }
 
-// Start binds the caller's notifier to the reconciler and blocks until ctx
-// is cancelled. The reconciler is driven by the controller-runtime manager;
-// this method wires the notifier so discovered peers are forwarded.
-func (p *Plugin) Start(ctx context.Context, notifier fwkdl.PeerNotifier) error {
-	if p.reconciler == nil {
-		return errors.New(PluginType + ": SetupWithManager must run before Start")
-	}
-	if err := p.reconciler.BindNotifier(notifier); err != nil {
-		return err
-	}
+// Start blocks until ctx is cancelled. The notifier parameter is unused; the
+// reconciler emits directly into the plugin's store.
+func (p *Plugin) Start(ctx context.Context, _ fwkdl.PeerNotifier) error {
 	<-ctx.Done()
 	return nil
 }

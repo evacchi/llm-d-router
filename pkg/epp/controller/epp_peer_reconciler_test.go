@@ -18,9 +18,7 @@ package controller
 
 import (
 	"context"
-	"sync"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -62,6 +60,12 @@ func readyPod(name, ns, ip string, lbls map[string]string) *corev1.Pod { //nolin
 		ObjRef()
 }
 
+// TestEPPPeerReconciler covers:
+//
+//   - a ready pod matching the selector is upserted
+//   - this replica's own pod is excluded by IP
+//   - a no-change reconcile emits no events
+//   - a deleted pod is removed
 func TestEPPPeerReconciler(t *testing.T) {
 	const (
 		ns         = "test-ns"
@@ -99,14 +103,12 @@ func TestEPPPeerReconciler(t *testing.T) {
 
 	r := &EPPPeerReconciler{
 		Reader:           fc,
+		Notifier:         notifier,
 		Selector:         labels.SelectorFromSet(peerLabels),
 		Namespace:        ns,
 		Port:             port,
 		SelfAddress:      selfIP,
 		OnFirstReconcile: func() { firstReconcileCalled = true },
-	}
-	if err := r.BindNotifier(notifier); err != nil {
-		t.Fatalf("BindNotifier: %v", err)
 	}
 
 	ctx := context.Background()
@@ -162,188 +164,5 @@ func TestEPPPeerReconciler(t *testing.T) {
 	wantDelete := types.NamespacedName{Namespace: ns, Name: "epp-1"}
 	if notifier.deletes[0] != wantDelete {
 		t.Errorf("delete[0] = %v, want %v", notifier.deletes[0], wantDelete)
-	}
-}
-
-func TestBindNotifierReplaysPeers(t *testing.T) {
-	const (
-		ns     = "test-ns"
-		selfIP = "10.0.0.1"
-		peerIP = "10.0.0.2"
-		port   = "9010"
-	)
-	peerLabels := map[string]string{"app": "my-epp"}
-
-	scheme := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		t.Fatalf("add scheme: %v", err)
-	}
-
-	fc := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			readyPod("epp-0", ns, selfIP, peerLabels),
-			readyPod("epp-1", ns, peerIP, peerLabels),
-		).
-		Build()
-
-	r := &EPPPeerReconciler{
-		Reader:      fc,
-		Selector:    labels.SelectorFromSet(peerLabels),
-		Namespace:   ns,
-		Port:        port,
-		SelfAddress: selfIP,
-	}
-
-	// Reconcile without a notifier: peers are discovered but no events are sent.
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{}); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	// Bind a notifier: existing peers are replayed.
-	notifier := &recordingNotifier{}
-	if err := r.BindNotifier(notifier); err != nil {
-		t.Fatalf("BindNotifier: %v", err)
-	}
-
-	if len(notifier.upserts) != 1 {
-		t.Fatalf("expected 1 replayed upsert, got %d", len(notifier.upserts))
-	}
-	want := fwkdl.PeerMetadata{
-		ID:      types.NamespacedName{Namespace: ns, Name: "epp-1"},
-		Address: peerIP,
-		Port:    port,
-	}
-	if notifier.upserts[0] != want {
-		t.Errorf("replayed upsert = %+v, want %+v", notifier.upserts[0], want)
-	}
-}
-
-// gatedNotifier applies events to a peer set. Its first Upsert blocks until
-// release is closed, so a test can interleave BindNotifier and Reconcile.
-type gatedNotifier struct {
-	mu      sync.Mutex
-	peers   map[types.NamespacedName]fwkdl.PeerMetadata
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
-}
-
-func newGatedNotifier() *gatedNotifier {
-	return &gatedNotifier{
-		peers:   map[types.NamespacedName]fwkdl.PeerMetadata{},
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-}
-
-func (n *gatedNotifier) Upsert(peer *fwkdl.PeerMetadata) {
-	n.once.Do(func() {
-		close(n.entered)
-		<-n.release
-	})
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.peers[peer.ID] = *peer
-}
-
-func (n *gatedNotifier) Delete(id types.NamespacedName) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	delete(n.peers, id)
-}
-
-// has reports whether the peer set contains id.
-func (n *gatedNotifier) has(name, ns string) bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	_, ok := n.peers[types.NamespacedName{Namespace: ns, Name: name}]
-	return ok
-}
-
-// TestBindDuringReconcile covers BindNotifier racing a Reconcile. If the replay
-// re-upserts a peer that Reconcile just deleted, the peer is already out of
-// prev, so no later Reconcile can delete it again.
-func TestBindDuringReconcile(t *testing.T) {
-	const (
-		ns     = "test-ns"
-		selfIP = "10.0.0.1"
-		port   = "9010"
-	)
-	peerLabels := map[string]string{"app": "my-epp"}
-
-	scheme := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		t.Fatalf("add scheme: %v", err)
-	}
-
-	goneP := readyPod("epp-2", ns, "10.0.0.3", peerLabels)
-	fc := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			readyPod("epp-0", ns, selfIP, peerLabels),
-			readyPod("epp-1", ns, "10.0.0.2", peerLabels),
-			goneP,
-		).
-		Build()
-
-	r := &EPPPeerReconciler{
-		Reader:      fc,
-		Selector:    labels.SelectorFromSet(peerLabels),
-		Namespace:   ns,
-		Port:        port,
-		SelfAddress: selfIP,
-	}
-
-	ctx := context.Background()
-
-	// Buffer both peers while no notifier is bound.
-	if _, err := r.Reconcile(ctx, ctrl.Request{}); err != nil {
-		t.Fatalf("buffering reconcile: %v", err)
-	}
-
-	// epp-2 is gone, so the next reconcile must delete it.
-	if err := fc.Delete(ctx, goneP); err != nil {
-		t.Fatalf("delete pod: %v", err)
-	}
-
-	notifier := newGatedNotifier()
-
-	bound := make(chan error, 1)
-	go func() { bound <- r.BindNotifier(notifier) }()
-
-	// The notifier is set and the replay is in flight.
-	<-notifier.entered
-
-	var reconcileErr error
-	reconciled := make(chan struct{})
-	go func() {
-		defer close(reconciled)
-		_, reconcileErr = r.Reconcile(ctx, ctrl.Request{})
-	}()
-
-	// Reconcile must not proceed while the replay is in flight. Give it the
-	// chance to run: if it does, the replay that follows resurrects epp-2.
-	// A closed channel stays receivable, so the join below is still safe.
-	select {
-	case <-reconciled:
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	close(notifier.release)
-
-	if err := <-bound; err != nil {
-		t.Fatalf("BindNotifier: %v", err)
-	}
-	<-reconciled
-	if reconcileErr != nil {
-		t.Fatalf("concurrent reconcile: %v", reconcileErr)
-	}
-
-	if notifier.has("epp-2", ns) {
-		t.Error("epp-2 was resurrected by the replay after Reconcile deleted it")
-	}
-	if !notifier.has("epp-1", ns) {
-		t.Error("epp-1 missing from the peer set")
 	}
 }

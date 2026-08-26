@@ -138,11 +138,9 @@ func TestReconcilerRunOnNonLeaders(t *testing.T) {
 func TestPeerReconcilerRunsOnNonLeaders(t *testing.T) {
 	mgr := newCapturingManager(t)
 	r := &EPPPeerReconciler{
+		Notifier:  &recordingNotifier{},
 		Selector:  labels.Everything(),
 		Namespace: "test",
-	}
-	if err := r.BindNotifier(&recordingNotifier{}); err != nil {
-		t.Fatalf("BindNotifier: %v", err)
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		t.Fatalf("SetupWithManager: %v", err)

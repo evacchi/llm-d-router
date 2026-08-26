@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -48,6 +49,10 @@ type EPPPeerReconciler struct {
 	Selector labels.Selector
 	// Namespace is the namespace of this EPP deployment's pods.
 	Namespace string
+	// mu guards notifier and prev against a late BindNotifier. It is held across
+	// notifier calls so a replay cannot interleave with a reconcile diff; a
+	// notifier that calls back into this reconciler deadlocks.
+	mu sync.Mutex
 	// Port is the port peer replicas listen on for state sync. Unlike
 	// EndpointSlices, Pods carry no self-reported service port, so it comes
 	// from config.
@@ -59,8 +64,8 @@ type EPPPeerReconciler struct {
 	// reconciliation. Used by the plugin to signal readiness.
 	OnFirstReconcile func()
 
-	// prev is the last reported peer set, used to compute deletes. Access is
-	// serialized by the controller (single concurrent reconcile).
+	// prev is the last reported peer set, used to compute deletes. While no
+	// notifier is bound it is the buffer that BindNotifier replays.
 	prev           map[types.NamespacedName]fwkdl.PeerMetadata
 	firstReconcile bool
 }
@@ -78,6 +83,7 @@ func (r *EPPPeerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl
 
 	desired := r.desiredPeers(pods.Items)
 
+	r.mu.Lock()
 	if r.notifier != nil {
 		for id, peer := range desired {
 			if existing, ok := r.prev[id]; !ok || existing != peer {
@@ -92,6 +98,7 @@ func (r *EPPPeerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl
 		}
 	}
 	r.prev = desired
+	r.mu.Unlock()
 
 	if !r.firstReconcile {
 		r.firstReconcile = true
@@ -107,10 +114,14 @@ func (r *EPPPeerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl
 // BindNotifier sets the notifier and replays any previously discovered peers.
 // It may only be called once; subsequent calls return an error.
 func (r *EPPPeerReconciler) BindNotifier(n fwkdl.PeerNotifier) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.notifier != nil {
 		return errors.New("notifier already bound")
 	}
 	r.notifier = n
+
 	for _, peer := range r.prev {
 		p := peer
 		n.Upsert(&p)

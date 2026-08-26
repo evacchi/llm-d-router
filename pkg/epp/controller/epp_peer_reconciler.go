@@ -18,9 +18,7 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -43,16 +41,12 @@ import (
 // leader), so leader election is disabled for its controller.
 type EPPPeerReconciler struct {
 	client.Reader
-	// notifier receives peer add/update/remove events.
-	notifier fwkdl.PeerNotifier
+	// Notifier receives peer add/update/remove events.
+	Notifier fwkdl.PeerNotifier
 	// Selector matches this EPP deployment's own pods (its peers).
 	Selector labels.Selector
 	// Namespace is the namespace of this EPP deployment's pods.
 	Namespace string
-	// mu guards notifier and prev against a late BindNotifier. It is held across
-	// notifier calls so a replay cannot interleave with a reconcile diff; a
-	// notifier that calls back into this reconciler deadlocks.
-	mu sync.Mutex
 	// Port is the port peer replicas listen on for state sync. Unlike
 	// EndpointSlices, Pods carry no self-reported service port, so it comes
 	// from config.
@@ -64,8 +58,7 @@ type EPPPeerReconciler struct {
 	// reconciliation. Used by the plugin to signal readiness.
 	OnFirstReconcile func()
 
-	// prev is the last reported peer set, used to compute deletes. While no
-	// notifier is bound it is the buffer that BindNotifier replays.
+	// prev is the last reported peer set, used to compute deletes.
 	prev           map[types.NamespacedName]fwkdl.PeerMetadata
 	firstReconcile bool
 }
@@ -83,22 +76,18 @@ func (r *EPPPeerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl
 
 	desired := r.desiredPeers(pods.Items)
 
-	r.mu.Lock()
-	if r.notifier != nil {
-		for id, peer := range desired {
-			if existing, ok := r.prev[id]; !ok || existing != peer {
-				p := peer
-				r.notifier.Upsert(&p)
-			}
+	for id, peer := range desired {
+		if existing, ok := r.prev[id]; !ok || existing != peer {
+			p := peer
+			r.Notifier.Upsert(&p)
 		}
-		for id := range r.prev {
-			if _, ok := desired[id]; !ok {
-				r.notifier.Delete(id)
-			}
+	}
+	for id := range r.prev {
+		if _, ok := desired[id]; !ok {
+			r.Notifier.Delete(id)
 		}
 	}
 	r.prev = desired
-	r.mu.Unlock()
 
 	if !r.firstReconcile {
 		r.firstReconcile = true
@@ -109,24 +98,6 @@ func (r *EPPPeerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl
 
 	logger.V(logutil.DEBUG).Info("Reconciled EPP peers", "peers", len(desired))
 	return ctrl.Result{}, nil
-}
-
-// BindNotifier sets the notifier and replays any previously discovered peers.
-// It may only be called once; subsequent calls return an error.
-func (r *EPPPeerReconciler) BindNotifier(n fwkdl.PeerNotifier) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.notifier != nil {
-		return errors.New("notifier already bound")
-	}
-	r.notifier = n
-
-	for _, peer := range r.prev {
-		p := peer
-		n.Upsert(&p)
-	}
-	return nil
 }
 
 // desiredPeers folds the ready, non-self pods matching Selector into a peer

@@ -68,10 +68,7 @@ type Plugin struct {
 	readyOnce sync.Once
 }
 
-var (
-	_ fwkdl.PeerDiscovery    = (*Plugin)(nil)
-	_ fwkplugin.ManagerSetup = (*Plugin)(nil)
-)
+var _ fwkdl.PeerDiscovery = (*Plugin)(nil)
 
 func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
 	p := &params{}

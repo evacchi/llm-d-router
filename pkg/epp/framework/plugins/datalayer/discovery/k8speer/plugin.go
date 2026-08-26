@@ -49,6 +49,20 @@ type params struct {
 
 // Plugin implements PeerDiscovery by watching Pods via a controller-runtime
 // reconciler registered with the caller's manager.
+//
+// Lifecycle has two phases:
+//
+//  1. SetupWithManager — registers the reconciler. Peers are discovered and
+//     buffered in the reconciler's prev map, but no events are emitted.
+//  2. Start — binds a PeerNotifier, replays the buffer, and forwards events
+//     from that point on. The caller (typically the runner) passes the notifier
+//     so it controls which store receives peers.
+//
+// The runner wires Start as a manager runnable:
+//
+//	g.Add("peer-discovery", func(ctx context.Context) error {
+//	    return peerDisc.Start(ctx, fwkdl.NewPeerNotifier(peerDisc.Store()))
+//	})
 type Plugin struct {
 	typedName   fwkplugin.TypedName
 	selector    labels.Selector
@@ -103,8 +117,8 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 
 func (p *Plugin) TypedName() fwkplugin.TypedName { return p.typedName }
 
-// Store returns the peer store. Currently unused; will be consumed by the
-// CrossReplicaSyncer once it is wired.
+// Store returns the peer store. The CrossReplicaSyncer reads from it to know
+// which replicas to sync with.
 func (p *Plugin) Store() *statesync.MemoryPeerStore { return p.store }
 
 // SetupWithManager registers the EPPPeerReconciler with the given manager.
@@ -130,6 +144,9 @@ func (p *Plugin) Ready() <-chan struct{} { return p.ready }
 // is cancelled. The reconciler is driven by the controller-runtime manager;
 // this method wires the notifier so discovered peers are forwarded.
 func (p *Plugin) Start(ctx context.Context, notifier fwkdl.PeerNotifier) error {
+	if p.reconciler == nil {
+		return errors.New(PluginType + ": SetupWithManager must run before Start")
+	}
 	if err := p.reconciler.BindNotifier(notifier); err != nil {
 		return err
 	}

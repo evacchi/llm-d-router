@@ -18,6 +18,9 @@ package epp
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -29,6 +32,7 @@ import (
 
 	"github.com/llm-d/llm-d-router/pkg/epp/controller"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/discovery/k8speer"
 	"github.com/llm-d/llm-d-router/pkg/epp/statesync"
 	testutil "github.com/llm-d/llm-d-router/pkg/epp/util/testing"
 )
@@ -53,6 +57,13 @@ func createPodWithStatus(ctx context.Context, t *testing.T, c client.Client, pod
 	require.NoError(t, c.Status().Update(ctx, pod))
 }
 
+// TestIntegrationEPPPeerDiscovery runs EPPPeerReconciler against a live API
+// server, with the notifier bound before the manager starts. It covers:
+//
+//   - a new peer becomes available
+//   - this replica's own pod is excluded by IP
+//   - a peer that goes unready is removed
+//   - a deleted peer is removed
 func TestIntegrationEPPPeerDiscovery(t *testing.T) {
 	nsName := "epp-peer-test-" + uuid.New().String()[:8]
 
@@ -120,4 +131,86 @@ func TestIntegrationEPPPeerDiscovery(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(store.Peers()) == 0
 	}, eventWaitTimeout, eventPollInterval, "expected 0 peers after deleting epp-2")
+}
+
+// TestIntegrationPeerPlugin runs the k8s-peer-discovery plugin against a live
+// API server. Start binds the notifier after the manager is already
+// reconciling, so it covers:
+//
+//   - peers found before Start are buffered, not emitted
+//   - the buffer is replayed once the notifier is bound
+//   - later pod changes reach the store
+func TestIntegrationPeerPlugin(t *testing.T) {
+	const (
+		selfIP  = "10.0.0.1"
+		peer1IP = "10.0.0.2"
+		peer2IP = "10.0.0.3"
+	)
+
+	nsName := "epp-peer-plugin-" + uuid.New().String()[:8]
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+	ctx, cancel := context.WithTimeout(context.Background(), testContextTimeout)
+	defer cancel()
+
+	require.NoError(t, k8sClient.Create(ctx, ns))
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(context.Background(), ns)
+	})
+
+	// The plugin reads its own address from the environment to exclude itself.
+	t.Setenv("POD_IP", selfIP)
+
+	params := fmt.Sprintf(`{"selector":"app=epp-peer-test","port":"9002","namespace":%q}`, nsName)
+	plugin, err := k8speer.Factory("peer-disc", json.NewDecoder(strings.NewReader(params)), nil)
+	require.NoError(t, err)
+
+	peerDisc, ok := plugin.(*k8speer.Plugin)
+	require.True(t, ok, "factory returned %T, want *k8speer.Plugin", plugin)
+
+	mgr, mgrClient := setupTestManager(t, testEnv.Config, nsName)
+	require.NoError(t, peerDisc.SetupWithManager(mgr))
+
+	startManagerAndWaitForSync(ctx, t, mgr)
+
+	// Discover a peer while no notifier is bound.
+	createPodWithStatus(ctx, t, mgrClient, readyPeerPod("epp-0", nsName, selfIP))
+	createPodWithStatus(ctx, t, mgrClient, readyPeerPod("epp-1", nsName, peer1IP))
+
+	select {
+	case <-peerDisc.Ready():
+	case <-ctx.Done():
+		t.Fatal("plugin did not become ready")
+	}
+	require.Empty(t, peerDisc.Store().Peers(), "peers must be buffered, not emitted, before Start")
+
+	// Start binds the notifier, which drains the buffer into the store.
+	startErr := make(chan error, 1)
+	go func() { startErr <- peerDisc.Start(ctx, fwkdl.NewPeerNotifier(peerDisc.Store())) }()
+
+	require.Eventually(t, func() bool {
+		peers := peerDisc.Store().Peers()
+		return len(peers) == 1 && peers[0].Address == peer1IP
+	}, eventWaitTimeout, eventPollInterval, "expected the buffered peer to be replayed")
+
+	// Discovery keeps flowing to the store once the notifier is bound.
+	peer2 := readyPeerPod("epp-2", nsName, peer2IP)
+	createPodWithStatus(ctx, t, mgrClient, peer2)
+
+	require.Eventually(t, func() bool {
+		return len(peerDisc.Store().Peers()) == 2
+	}, eventWaitTimeout, eventPollInterval, "expected 2 peers")
+
+	require.NoError(t, mgrClient.Delete(ctx, peer2))
+
+	require.Eventually(t, func() bool {
+		peers := peerDisc.Store().Peers()
+		return len(peers) == 1 && peers[0].Address == peer1IP
+	}, eventWaitTimeout, eventPollInterval, "expected epp-2 to be removed")
+
+	select {
+	case err := <-startErr:
+		t.Fatalf("Start returned early: %v", err)
+	default:
+	}
 }

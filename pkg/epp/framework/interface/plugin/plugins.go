@@ -17,9 +17,7 @@ limitations under the License.
 
 package plugin
 
-import (
-	"encoding/json"
-)
+import "encoding/json"
 
 // Plugin defines the interface for a plugin.
 // This interface should be embedded in all plugins across the code.

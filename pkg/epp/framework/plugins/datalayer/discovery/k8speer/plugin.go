@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package k8speer provides a PeerDiscovery plugin that watches this EPP
-// deployment's own Pods via a controller-runtime reconciler.
+// deployment's own Pods through the datalayer notification runtime.
 package k8speer
 
 import (
@@ -26,14 +26,14 @@ import (
 	"os"
 	"sync"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/llm-d/llm-d-router/pkg/epp/controller"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
-	"github.com/llm-d/llm-d-router/pkg/epp/statesync"
+	notifications "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/notifications"
+	podutil "github.com/llm-d/llm-d-router/pkg/epp/util/pod"
 )
 
 const PluginType = "k8s-peer-discovery"
@@ -48,27 +48,35 @@ type params struct {
 	Namespace string `json:"namespace"`
 }
 
-// Plugin implements PeerDiscovery by watching Pods via a controller-runtime
-// reconciler registered with the caller's manager.
-//
-// SetupWithManager wires the reconciler to emit directly into the plugin's
-// MemoryPeerStore and registers a Start runnable with the manager. Peers are
-// available in Store() from the first reconcile; no buffering or late binding
-// is needed because the store is goroutine-safe and owned by the plugin.
+// peerEvent is one change to the peer set, produced by the Pod extractor and
+// applied to the PeerNotifier by Start.
+type peerEvent struct {
+	kind fwkdl.EventType
+	// id identifies the peer to delete. Set for EventDelete.
+	id types.NamespacedName
+	// peer is the peer to upsert. Set for EventAddOrUpdate.
+	peer *fwkdl.PeerMetadata
+}
+
+// Plugin implements PeerDiscovery. Pod events arrive through a datalayer
+// notification extractor and are applied to the PeerNotifier from Start's
+// goroutine, which keeps the notifier's single-goroutine contract.
 type Plugin struct {
 	typedName   fwkplugin.TypedName
 	selector    labels.Selector
 	port        string
 	namespace   string
 	selfAddress string
-	store       *statesync.MemoryPeerStore
-	notifier    fwkdl.PeerNotifier
+
+	// events carries peer set changes from the extractor to Start.
+	events chan peerEvent
 
 	ready     chan struct{}
 	readyOnce sync.Once
 }
 
 var _ fwkdl.PeerDiscovery = (*Plugin)(nil)
+var _ fwkdl.Registrant = (*Plugin)(nil)
 
 func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
 	p := &params{}
@@ -93,53 +101,80 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 	if name == "" {
 		name = PluginType
 	}
-	store := statesync.NewMemoryPeerStore()
 	return &Plugin{
 		typedName:   fwkplugin.TypedName{Type: PluginType, Name: name},
 		selector:    selector,
 		port:        p.Port,
 		namespace:   p.Namespace,
 		selfAddress: os.Getenv("POD_IP"),
-		store:       store,
-		notifier:    fwkdl.NewPeerNotifier(store),
+		events:      make(chan peerEvent),
 		ready:       make(chan struct{}),
 	}, nil
 }
 
 func (p *Plugin) TypedName() fwkplugin.TypedName { return p.typedName }
 
-// Store returns the peer store. The CrossReplicaSyncer reads from it to know
-// which replicas to sync with.
-func (p *Plugin) Store() *statesync.MemoryPeerStore { return p.store }
-
-// SetupWithManager registers the EPPPeerReconciler and a Start runnable with
-// the given manager. The reconciler emits directly into the plugin's store via
-// its notifier.
-func (p *Plugin) SetupWithManager(mgr ctrl.Manager) error {
-	reconciler := &controller.EPPPeerReconciler{
-		Reader:      mgr.GetClient(),
-		Notifier:    p.notifier,
-		Selector:    p.selector,
-		Namespace:   p.namespace,
-		Port:        p.port,
-		SelfAddress: p.selfAddress,
-		OnFirstReconcile: func() {
-			p.readyOnce.Do(func() { close(p.ready) })
-		},
-	}
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		return err
-	}
-	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		return p.Start(ctx, nil)
-	}))
+// RegisterDependencies registers the Pod notification source used for peer
+// discovery. The datalayer runtime owns the Kubernetes watch and dispatches
+// deep-copied Pod events to the extractor.
+func (p *Plugin) RegisterDependencies(r fwkdl.Registrar) error {
+	return r.Register(fwkdl.PendingRegistration{
+		Owner:      p.typedName,
+		SourceType: notifications.NotificationSourceType,
+		Extractor:  &podExtractor{plugin: p},
+		DefaultSource: notifications.NewK8sNotificationSource(
+			notifications.NotificationSourceType,
+			p.typedName.Name+"/pod",
+			podGVK,
+		),
+	})
 }
 
 func (p *Plugin) Ready() <-chan struct{} { return p.ready }
 
-// Start blocks until ctx is cancelled. The notifier parameter is unused; the
-// reconciler emits directly into the plugin's store.
-func (p *Plugin) Start(ctx context.Context, _ fwkdl.PeerNotifier) error {
-	<-ctx.Done()
+// Start signals readiness, then applies extractor events to notifier until
+// ctx is cancelled. Peers from the initial Pod list may arrive after Ready.
+func (p *Plugin) Start(ctx context.Context, notifier fwkdl.PeerNotifier) error {
+	p.readyOnce.Do(func() { close(p.ready) })
+
+	for {
+		select {
+		case ev := <-p.events:
+			if err := apply(notifier, ev); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func apply(notifier fwkdl.PeerNotifier, ev peerEvent) error {
+	switch ev.kind {
+	case fwkdl.EventAddOrUpdate:
+		notifier.Upsert(ev.peer)
+	case fwkdl.EventDelete:
+		notifier.Delete(ev.id)
+	default:
+		return fmt.Errorf("%s: unhandled peer event kind %v", PluginType, ev.kind)
+	}
 	return nil
+}
+
+// emit hands an event to Start. The channel is unbuffered, so an event raised
+// before Start is draining waits for it instead of being dropped.
+func (p *Plugin) emit(ctx context.Context, ev peerEvent) error {
+	select {
+	case p.events <- ev:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *Plugin) acceptsPod(pod *corev1.Pod) bool {
+	return p.selector.Matches(labels.Set(pod.Labels)) &&
+		pod.Status.PodIP != "" &&
+		pod.Status.PodIP != p.selfAddress &&
+		podutil.IsPodReady(pod)
 }

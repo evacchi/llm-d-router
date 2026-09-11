@@ -41,6 +41,7 @@ import (
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -160,6 +161,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/requestcontrol"
 	"github.com/llm-d/llm-d-router/pkg/epp/scheduling"
 	runserver "github.com/llm-d/llm-d-router/pkg/epp/server"
+	"github.com/llm-d/llm-d-router/pkg/epp/statesync"
 	"github.com/llm-d/llm-d-router/version"
 )
 
@@ -400,16 +402,6 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 	}
 	setupLog.Info("EPP config after phase two", "config", eppConfig)
 
-	// Resolve the peer discovery plugin from config, if configured.
-	var peerDiscPlugin fwkdl.PeerDiscovery
-	if rawConfig.DataLayer != nil && rawConfig.DataLayer.Discovery != nil && rawConfig.DataLayer.Discovery.Peers != nil {
-		peerDiscPlugin, err = r.resolvePeerDiscovery(rawConfig)
-		if err != nil {
-			setupLog.Error(err, "Failed to resolve peer discovery plugin")
-			return nil, nil, err
-		}
-	}
-
 	// --- Setup Metrics Server ---
 	metricsutil.SetFairnessIDLabelLimit(opts.FairnessIDMetricLabelLimit)
 	r.customCollectors = append(r.customCollectors, collectors.NewInferencePoolMetricsCollector(ds))
@@ -511,12 +503,9 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		setupLog.Error(err, "Failed to setup EPP controllers")
 		return nil, nil, err
 	}
-
-	if kp, ok := peerDiscPlugin.(*k8speer.Plugin); ok {
-		if err := kp.SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "Failed to setup peer discovery")
-			return nil, nil, err
-		}
+	if err := r.setupPeerDiscovery(mgr, rawConfig); err != nil {
+		setupLog.Error(err, "Failed to setup peer discovery")
+		return nil, nil, err
 	}
 
 	// --- Add Runnables to Manager ---
@@ -974,21 +963,32 @@ func (r *Runner) resolveDiscovery(rawConfig *configapiv1.EndpointPickerConfig) (
 	return disc, nil
 }
 
-// resolvePeerDiscovery returns the peer discovery plugin identified by
-// rawConfig.DataLayer.Discovery.Peers.PluginRef. The plugin is expected to
+// setupPeerDiscovery runs the PeerDiscovery plugin referenced by
+// rawConfig.DataLayer.Discovery.Peers, when set, as a manager runnable on
+// every replica. Discovered peers land in store. The plugin is expected to
 // have been instantiated and registered in r.PluginHandle by
 // parseConfigurationPhaseTwo.
-func (r *Runner) resolvePeerDiscovery(rawConfig *configapi.EndpointPickerConfig) (fwkdl.PeerDiscovery, error) {
-	ref := rawConfig.DataLayer.Discovery.Peers.PluginRef
+func (r *Runner) setupPeerDiscovery(mgr ctrl.Manager, rawConfig *configapi.EndpointPickerConfig) error {
+	dl := rawConfig.DataLayer
+	if dl == nil || dl.Discovery == nil || dl.Discovery.Peers == nil {
+		return nil
+	}
+
+	ref := dl.Discovery.Peers.PluginRef
 	p := r.PluginHandle.Plugin(ref)
 	if p == nil {
-		return nil, fmt.Errorf("peerDiscovery: no plugin found with name %q", ref)
+		return fmt.Errorf("peerDiscovery: no plugin found with name %q", ref)
 	}
 	disc, ok := p.(fwkdl.PeerDiscovery)
 	if !ok {
-		return nil, fmt.Errorf("peerDiscovery: plugin %q does not implement PeerDiscovery", ref)
+		return fmt.Errorf("peerDiscovery: plugin %q does not implement PeerDiscovery", ref)
 	}
-	return disc, nil
+
+	peerStore := statesync.NewMemoryPeerStore()
+	notifier := fwkdl.NewPeerNotifier(peerStore)
+	return mgr.Add(runnable.NoLeaderElection(manager.RunnableFunc(func(ctx context.Context) error {
+		return disc.Start(ctx, notifier)
+	})))
 }
 
 // initAdmissionControl builds the request admission controller, gated by the

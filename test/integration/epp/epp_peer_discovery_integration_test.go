@@ -23,14 +23,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	"github.com/llm-d/llm-d-router/pkg/epp/controller"
+	"github.com/llm-d/llm-d-router/internal/runnable"
+	"github.com/llm-d/llm-d-router/pkg/epp/datalayer"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/discovery/k8speer"
 	"github.com/llm-d/llm-d-router/pkg/epp/statesync"
@@ -57,87 +59,11 @@ func createPodWithStatus(ctx context.Context, t *testing.T, c client.Client, pod
 	require.NoError(t, c.Status().Update(ctx, pod))
 }
 
-// TestIntegrationEPPPeerDiscovery runs EPPPeerReconciler against a live API
-// server, with the notifier set at construction. It covers:
-//
-//   - a ready pod matching the selector becomes a peer
-//   - this replica's own pod is excluded by IP
-//   - a peer that goes unready is removed
-//   - a deleted peer is removed
-func TestIntegrationEPPPeerDiscovery(t *testing.T) {
-	nsName := "epp-peer-test-" + uuid.New().String()[:8]
-
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
-	ctx, cancel := context.WithTimeout(context.Background(), testContextTimeout)
-	defer cancel()
-
-	require.NoError(t, k8sClient.Create(ctx, ns))
-	t.Cleanup(func() {
-		_ = k8sClient.Delete(context.Background(), ns)
-	})
-
-	mgr, mgrClient := setupTestManager(t, testEnv.Config, nsName)
-
-	store := statesync.NewMemoryPeerStore()
-	selector := labels.SelectorFromSet(map[string]string{"app": "epp-peer-test"})
-
-	r := &controller.EPPPeerReconciler{
-		Reader:      mgr.GetClient(),
-		Notifier:    fwkdl.NewPeerNotifier(store),
-		Selector:    selector,
-		Namespace:   nsName,
-		Port:        "9002",
-		SelfAddress: "10.0.0.1",
-	}
-	require.NoError(t, r.SetupWithManager(mgr))
-
-	startManagerAndWaitForSync(ctx, t, mgr)
-
-	// Create self pod (excluded) and one peer pod.
-	selfPod := readyPeerPod("epp-0", nsName, "10.0.0.1")
-	peer1 := readyPeerPod("epp-1", nsName, "10.0.0.2")
-	createPodWithStatus(ctx, t, mgrClient, selfPod)
-	createPodWithStatus(ctx, t, mgrClient, peer1)
-
-	require.Eventually(t, func() bool {
-		peers := store.Peers()
-		return len(peers) == 1 && peers[0].Address == "10.0.0.2"
-	}, eventWaitTimeout, eventPollInterval, "expected 1 peer (10.0.0.2)")
-
-	// Add a second peer.
-	peer2 := readyPeerPod("epp-2", nsName, "10.0.0.3")
-	createPodWithStatus(ctx, t, mgrClient, peer2)
-
-	require.Eventually(t, func() bool {
-		return len(store.Peers()) == 2
-	}, eventWaitTimeout, eventPollInterval, "expected 2 peers")
-
-	// Mark peer1 as not ready.
-	require.NoError(t, mgrClient.Get(ctx, client.ObjectKeyFromObject(peer1), peer1))
-	peer1.Status.Conditions = []corev1.PodCondition{{
-		Type:   corev1.PodReady,
-		Status: corev1.ConditionFalse,
-	}}
-	require.NoError(t, mgrClient.Status().Update(ctx, peer1))
-
-	require.Eventually(t, func() bool {
-		peers := store.Peers()
-		return len(peers) == 1 && peers[0].Address == "10.0.0.3"
-	}, eventWaitTimeout, eventPollInterval, "expected 1 peer (10.0.0.3) after marking epp-1 not ready")
-
-	// Delete peer2.
-	require.NoError(t, mgrClient.Delete(ctx, peer2))
-
-	require.Eventually(t, func() bool {
-		return len(store.Peers()) == 0
-	}, eventWaitTimeout, eventPollInterval, "expected 0 peers after deleting epp-2")
-}
-
 // TestIntegrationPeerPlugin runs the k8s-peer-discovery plugin end to end
-// against a live API server. SetupWithManager registers both the reconciler
-// and a Start runnable, so the manager drives the full lifecycle:
+// against a live API server. The datalayer runtime binds the Pod watch and
+// the manager runs Start, so the manager drives the full lifecycle:
 //
-//   - peers flow directly into the store from the first reconcile
+//   - peers reach the store through the notifier passed to Start
 //   - a peer that is deleted is removed from the store
 func TestIntegrationPeerPlugin(t *testing.T) {
 	const (
@@ -168,12 +94,19 @@ func TestIntegrationPeerPlugin(t *testing.T) {
 	require.True(t, ok, "factory returned %T, want *k8speer.Plugin", plugin)
 
 	mgr, mgrClient := setupTestManager(t, testEnv.Config, nsName)
-	require.NoError(t, peerDisc.SetupWithManager(mgr))
+	runtime := datalayer.NewRuntime(0)
+	require.NoError(t, peerDisc.RegisterDependencies(runtime))
+	require.NoError(t, runtime.Configure(nil, logr.Discard()))
+	require.NoError(t, runtime.Start(ctx, mgr))
+
+	store := statesync.NewMemoryPeerStore()
+	require.NoError(t, mgr.Add(runnable.NoLeaderElection(manager.RunnableFunc(func(ctx context.Context) error {
+		return peerDisc.Start(ctx, fwkdl.NewPeerNotifier(store))
+	}))))
 
 	startManagerAndWaitForSync(ctx, t, mgr)
 
-	// Create pods. The manager-registered Start runnable binds the buffer to
-	// the store, so peers flow through to Store() once the manager is up.
+	// Create pods. The datalayer notification runtime feeds the store.
 	createPodWithStatus(ctx, t, mgrClient, readyPeerPod("epp-0", nsName, selfIP))
 	createPodWithStatus(ctx, t, mgrClient, readyPeerPod("epp-1", nsName, peer1IP))
 
@@ -184,7 +117,7 @@ func TestIntegrationPeerPlugin(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		peers := peerDisc.Store().Peers()
+		peers := store.Peers()
 		return len(peers) == 1 && peers[0].Address == peer1IP
 	}, eventWaitTimeout, eventPollInterval, "expected 1 peer")
 
@@ -193,13 +126,13 @@ func TestIntegrationPeerPlugin(t *testing.T) {
 	createPodWithStatus(ctx, t, mgrClient, peer2)
 
 	require.Eventually(t, func() bool {
-		return len(peerDisc.Store().Peers()) == 2
+		return len(store.Peers()) == 2
 	}, eventWaitTimeout, eventPollInterval, "expected 2 peers")
 
 	require.NoError(t, mgrClient.Delete(ctx, peer2))
 
 	require.Eventually(t, func() bool {
-		peers := peerDisc.Store().Peers()
+		peers := store.Peers()
 		return len(peers) == 1 && peers[0].Address == peer1IP
 	}, eventWaitTimeout, eventPollInterval, "expected epp-2 to be removed")
 }

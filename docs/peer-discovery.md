@@ -58,8 +58,9 @@ type PeerDiscovery interface {
     // error occurs. The caller invokes Start in a dedicated goroutine.
     Start(ctx context.Context, notifier PeerNotifier) error
 
-    // Ready returns a channel that is closed once after the plugin has
-    // completed its initial reconciliation with the underlying source.
+    // Ready returns a channel that is closed once discovery is delivering
+    // peers. The peer set may be incomplete when Ready closes and changes
+    // over time.
     Ready() <-chan struct{}
 }
 ```
@@ -109,15 +110,16 @@ returning a deterministically ordered snapshot of the current peer set.
 ## In-tree plugin: k8s-peer-discovery
 
 The `k8s-peer-discovery` plugin
-(`pkg/epp/framework/plugins/datalayer/discovery/k8speer`) watches Pods
-matching the EPP Deployment's own label selector via a controller-runtime
-reconciler. It re-uses the Pod get/watch/list RBAC the EPP already holds for
-model-server pod tracking, so no additional permissions are required.
+(`pkg/epp/framework/plugins/datalayer/discovery/k8speer`) registers a Pod
+notification extractor with the datalayer runtime. The runtime owns the
+controller-runtime watch and runs it on every EPP replica. The plugin filters
+Pods by namespace, label selector, readiness, and self IP. Each ready,
+non-self Pod is upserted through the `PeerNotifier` passed to `Start`; Pods
+that become unready or are deleted are removed. `Start` applies all events
+from its own goroutine, so the notifier's single-goroutine contract holds.
 
-The reconciler runs on every replica (leader election is disabled for its
-controller) and filters pods by namespace, label selector, and readiness.
-Each ready, non-self pod is upserted through the bound `PeerNotifier`; pods
-that become unready or are deleted are removed.
+The plugin closes `Ready()` when `Start` runs. Peers from the initial Pod
+list may arrive after that.
 
 ### Parameters
 

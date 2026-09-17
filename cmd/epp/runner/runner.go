@@ -984,6 +984,7 @@ func (r *Runner) setupPeerDiscovery(mgr ctrl.Manager, rawConfig *configapi.Endpo
 		return fmt.Errorf("peerDiscovery: plugin %q does not implement PeerDiscovery", ref)
 	}
 
+	// TODO(#1892): Connect peerStore to CrossReplicaSyncer. See TestPeerDiscoveryFullWiring.
 	peerStore := statesync.NewMemoryPeerStore()
 	notifier := fwkdl.NewPeerNotifier(peerStore)
 	return mgr.Add(runnable.NoLeaderElection(manager.RunnableFunc(func(ctx context.Context) error {

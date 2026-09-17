@@ -186,7 +186,7 @@ registry. A runnable example of this pattern is in the test suite:
 - [`pkg/epp/framework/interface/datalayer/peer_test.go`](../pkg/epp/framework/interface/datalayer/peer_test.go)
   tests the interface contract with a fake store.
 - [`pkg/epp/statesync/peerstore_test.go`](../pkg/epp/statesync/peerstore_test.go)
-  (`TestPeerDiscoveryFullStack`) exercises the full plugin-to-store pipeline
+  (`TestPeerDiscoveryFullWiring`) exercises the full plugin-to-store pipeline
   with `MemoryPeerStore`.
 
 ```go

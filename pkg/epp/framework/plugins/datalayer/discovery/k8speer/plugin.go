@@ -94,6 +94,10 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 	if p.Namespace == "" {
 		return nil, errors.New(PluginType + ": 'namespace' parameter is required")
 	}
+	selfAddress := os.Getenv("POD_IP")
+	if selfAddress == "" {
+		return nil, errors.New(PluginType + ": 'POD_IP' environment variable is required")
+	}
 	selector, err := labels.Parse(p.Selector)
 	if err != nil {
 		return nil, fmt.Errorf("%s: invalid 'selector' %q: %w", PluginType, p.Selector, err)
@@ -106,7 +110,7 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 		selector:    selector,
 		port:        p.Port,
 		namespace:   p.Namespace,
-		selfAddress: os.Getenv("POD_IP"),
+		selfAddress: selfAddress,
 		events:      make(chan peerEvent),
 		ready:       make(chan struct{}),
 	}, nil

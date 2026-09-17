@@ -127,10 +127,11 @@ list may arrive after that.
 |---|---|---|---|
 | `selector` | `string` | yes | Kubernetes label selector matching this EPP Deployment's pods (e.g. `app=my-epp`). |
 | `port` | `string` | yes | Port peer replicas listen on for state sync. Pods do not self-report a service port, so it comes from config. |
-| `namespace` | `string` | yes | Namespace of this EPP Deployment's pods. |
+| `namespace` | `string` | yes | Namespace of this EPP Deployment's pods. It must match the EPP deployment namespace because the Pod cache is scoped to that namespace. |
 
-The plugin reads `POD_IP` from the environment to exclude this replica from
-the peer set.
+The plugin requires the `POD_IP` environment variable to exclude this replica
+from the peer set. Configure it from the Pod IP through the Kubernetes
+Downward API.
 
 ### Example config
 

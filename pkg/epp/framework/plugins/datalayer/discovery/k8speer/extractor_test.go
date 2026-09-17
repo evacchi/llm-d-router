@@ -42,6 +42,16 @@ func (r *testRegistrar) Register(reg fwkdl.PendingRegistration) error {
 	return nil
 }
 
+func TestFactoryRequiresPodIP(t *testing.T) {
+	t.Setenv("POD_IP", "")
+
+	_, err := Factory("peer-disc", json.NewDecoder(
+		strings.NewReader(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
+	if err == nil || !strings.Contains(err.Error(), "'POD_IP' environment variable is required") {
+		t.Fatalf("Factory error = %v, want missing POD_IP error", err)
+	}
+}
+
 func TestPodExtractorFiltersAndTracksPeers(t *testing.T) {
 	t.Setenv("POD_IP", "10.0.0.1")
 	plugin, err := Factory("peer-disc", json.NewDecoder(
@@ -132,6 +142,7 @@ func TestApplyPeerEvent(t *testing.T) {
 }
 
 func TestStartSignalsReadyWithoutPeers(t *testing.T) {
+	t.Setenv("POD_IP", "10.0.0.1")
 	plugin, err := Factory("peer-disc", json.NewDecoder(
 		strings.NewReader(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
 	if err != nil {

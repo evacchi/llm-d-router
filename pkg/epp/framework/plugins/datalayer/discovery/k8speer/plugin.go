@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -67,6 +68,7 @@ type Plugin struct {
 	port        string
 	namespace   string
 	selfAddress string
+	selfName    string
 
 	// events carries peer set changes from the extractor to Start.
 	events chan peerEvent
@@ -91,12 +93,20 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 	if p.Port == "" {
 		return nil, errors.New(PluginType + ": 'port' parameter is required")
 	}
+	if port, err := strconv.Atoi(p.Port); err != nil || port < 1 || port > 65535 {
+		return nil, fmt.Errorf("%s: invalid port %q", PluginType, p.Port)
+	}
 	if p.Namespace == "" {
 		return nil, errors.New(PluginType + ": 'namespace' parameter is required")
 	}
 	selfAddress := os.Getenv("POD_IP")
+	selfName := ""
 	if selfAddress == "" {
-		return nil, errors.New(PluginType + ": 'POD_IP' environment variable is required")
+		var err error
+		selfName, err = os.Hostname()
+		if err != nil {
+			return nil, fmt.Errorf("%s: get hostname: %w", PluginType, err)
+		}
 	}
 	selector, err := labels.Parse(p.Selector)
 	if err != nil {
@@ -111,6 +121,7 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 		port:        p.Port,
 		namespace:   p.Namespace,
 		selfAddress: selfAddress,
+		selfName:    selfName,
 		events:      make(chan peerEvent),
 		ready:       make(chan struct{}),
 	}, nil
@@ -180,5 +191,6 @@ func (p *Plugin) acceptsPod(pod *corev1.Pod) bool {
 	return p.selector.Matches(labels.Set(pod.Labels)) &&
 		pod.Status.PodIP != "" &&
 		pod.Status.PodIP != p.selfAddress &&
+		pod.Name != p.selfName &&
 		podutil.IsPodReady(pod)
 }

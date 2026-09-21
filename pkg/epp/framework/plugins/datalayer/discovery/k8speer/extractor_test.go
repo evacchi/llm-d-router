@@ -19,7 +19,6 @@ package k8speer
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
+	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-router/pkg/epp/statesync"
 )
 
@@ -42,20 +42,41 @@ func (r *testRegistrar) Register(reg fwkdl.PendingRegistration) error {
 	return nil
 }
 
-func TestFactoryRequiresPodIP(t *testing.T) {
+func TestFactoryUsesHostnameWhenPodIPUnset(t *testing.T) {
 	t.Setenv("POD_IP", "")
 
-	_, err := Factory("peer-disc", json.NewDecoder(
-		strings.NewReader(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
-	if err == nil || !strings.Contains(err.Error(), "'POD_IP' environment variable is required") {
-		t.Fatalf("Factory error = %v, want missing POD_IP error", err)
+	plugin, err := Factory("peer-disc", fwkplugin.StrictDecoder(
+		json.RawMessage(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
+	if err != nil {
+		t.Fatalf("Factory: %v", err)
+	}
+	peerPlugin := plugin.(*Plugin)
+	if peerPlugin.selfName == "" {
+		t.Fatal("selfName is empty")
+	}
+	if peerPlugin.acceptsPod(makePod(peerPlugin.selfName, "ns", "10.0.0.1", map[string]string{"app": "epp"}, true)) {
+		t.Fatal("plugin accepts self Pod when POD_IP is unset")
+	}
+}
+
+func TestFactoryRejectsInvalidPort(t *testing.T) {
+	t.Setenv("POD_IP", "10.0.0.1")
+
+	for _, port := range []string{"0", "65536", "invalid"} {
+		t.Run(port, func(t *testing.T) {
+			_, err := Factory("peer-disc", fwkplugin.StrictDecoder(json.RawMessage(
+				`{"selector":"app=epp","port":"`+port+`","namespace":"ns"}`)), nil)
+			if err == nil {
+				t.Fatal("Factory error = nil, want invalid port error")
+			}
+		})
 	}
 }
 
 func TestPodExtractorFiltersAndTracksPeers(t *testing.T) {
 	t.Setenv("POD_IP", "10.0.0.1")
-	plugin, err := Factory("peer-disc", json.NewDecoder(
-		strings.NewReader(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
+	plugin, err := Factory("peer-disc", fwkplugin.StrictDecoder(
+		json.RawMessage(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
 	if err != nil {
 		t.Fatalf("Factory: %v", err)
 	}
@@ -143,8 +164,8 @@ func TestApplyPeerEvent(t *testing.T) {
 
 func TestStartSignalsReadyWithoutPeers(t *testing.T) {
 	t.Setenv("POD_IP", "10.0.0.1")
-	plugin, err := Factory("peer-disc", json.NewDecoder(
-		strings.NewReader(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
+	plugin, err := Factory("peer-disc", fwkplugin.StrictDecoder(
+		json.RawMessage(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
 	if err != nil {
 		t.Fatalf("Factory: %v", err)
 	}

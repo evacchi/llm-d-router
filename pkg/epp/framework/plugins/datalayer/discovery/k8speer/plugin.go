@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
@@ -80,7 +81,7 @@ type Plugin struct {
 var _ fwkdl.PeerDiscovery = (*Plugin)(nil)
 var _ fwkdl.Registrant = (*Plugin)(nil)
 
-func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
+func Factory(name string, parameters *json.Decoder, handle fwkplugin.Handle) (fwkplugin.Plugin, error) {
 	p := &params{}
 	if parameters != nil {
 		if err := parameters.Decode(p); err != nil {
@@ -98,6 +99,13 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 	}
 	if p.Namespace == "" {
 		return nil, errors.New(PluginType + ": 'namespace' parameter is required")
+	}
+	if namespace, ok := os.LookupEnv("NAMESPACE"); ok {
+		if namespace != p.Namespace {
+			return nil, fmt.Errorf("%s: configured 'namespace' %q does not match NAMESPACE %q", PluginType, p.Namespace, namespace)
+		}
+	} else if handle != nil {
+		log.FromContext(handle.Context()).Info("NAMESPACE is unset; cannot validate configured peer namespace", "namespace", p.Namespace)
 	}
 	selfAddress := os.Getenv("POD_IP")
 	selfName := ""

@@ -43,6 +43,7 @@ func (r *testRegistrar) Register(reg fwkdl.PendingRegistration) error {
 }
 
 func TestFactoryUsesHostnameWhenPodIPUnset(t *testing.T) {
+	t.Setenv("NAMESPACE", "ns")
 	t.Setenv("POD_IP", "")
 
 	plugin, err := Factory("peer-disc", fwkplugin.StrictDecoder(
@@ -60,6 +61,7 @@ func TestFactoryUsesHostnameWhenPodIPUnset(t *testing.T) {
 }
 
 func TestFactoryRejectsInvalidPort(t *testing.T) {
+	t.Setenv("NAMESPACE", "ns")
 	t.Setenv("POD_IP", "10.0.0.1")
 
 	for _, port := range []string{"0", "65536", "invalid"} {
@@ -73,7 +75,19 @@ func TestFactoryRejectsInvalidPort(t *testing.T) {
 	}
 }
 
+func TestFactoryRejectsNamespaceMismatch(t *testing.T) {
+	t.Setenv("NAMESPACE", "actual-ns")
+	t.Setenv("POD_IP", "10.0.0.1")
+
+	_, err := Factory("peer-disc", fwkplugin.StrictDecoder(
+		json.RawMessage(`{"selector":"app=epp","port":"9002","namespace":"configured-ns"}`)), nil)
+	if err == nil {
+		t.Fatal("Factory error = nil, want namespace mismatch error")
+	}
+}
+
 func TestPodExtractorFiltersAndTracksPeers(t *testing.T) {
+	t.Setenv("NAMESPACE", "ns")
 	t.Setenv("POD_IP", "10.0.0.1")
 	plugin, err := Factory("peer-disc", fwkplugin.StrictDecoder(
 		json.RawMessage(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)
@@ -163,6 +177,7 @@ func TestApplyPeerEvent(t *testing.T) {
 }
 
 func TestStartSignalsReadyWithoutPeers(t *testing.T) {
+	t.Setenv("NAMESPACE", "ns")
 	t.Setenv("POD_IP", "10.0.0.1")
 	plugin, err := Factory("peer-disc", fwkplugin.StrictDecoder(
 		json.RawMessage(`{"selector":"app=epp","port":"9002","namespace":"ns"}`)), nil)

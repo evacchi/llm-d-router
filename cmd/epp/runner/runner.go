@@ -968,7 +968,7 @@ func (r *Runner) resolveDiscovery(rawConfig *configapiv1.EndpointPickerConfig) (
 // every replica. Discovered peers land in store. The plugin is expected to
 // have been instantiated and registered in r.PluginHandle by
 // parseConfigurationPhaseTwo.
-func (r *Runner) setupPeerDiscovery(mgr ctrl.Manager, rawConfig *configapi.EndpointPickerConfig) error {
+func (r *Runner) setupPeerDiscovery(mgr ctrl.Manager, rawConfig *configapiv1.EndpointPickerConfig) error {
 	dl := rawConfig.DataLayer
 	if dl == nil || dl.Discovery == nil || dl.Discovery.Peers == nil {
 		return nil
